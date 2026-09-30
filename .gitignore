@@ -11,3 +11,6 @@ tmp/
 .local/
 apps/mobile/ios/
 apps/mobile/android/
+
+artifacts/
+dist-check/

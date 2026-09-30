@@ -1,9 +1,11 @@
+import path from 'node:path';
 import {Router,raw} from 'express';
 import {z} from 'zod';
 import {createHmac,timingSafeEqual} from 'node:crypto';
 import {PlatformRepository} from '../repositories/platform';
 import {BookingService} from '../services/bookings';
 import {DispatchService} from '../services/dispatch';
+import {SessionChangeService} from '../services/session-changes';
 import {SessionService} from '../services/sessions';
 import {MediaService} from '../services/media';
 import {OperationsService} from '../services/operations';
@@ -15,11 +17,11 @@ import {id,page,respond} from '../controllers/platform';
 import type {Env} from '../config/env';
 import {categories,earliestStart} from '@kamraw/domain';
 export function routes(repo:PlatformRepository,env:Env){
-  const router=Router(),booking=new BookingService(repo),dispatch=new DispatchService(repo),session=new SessionService(repo,env.APP_MODE==='demo'),media=new MediaService(repo,env.MEDIA_ROOT,env.APP_MODE==='demo'),ops=new OperationsService(repo,env.APP_MODE==='demo'),account=new AccountService(repo),query=new QueryService(repo);
+  const router=Router(),booking=new BookingService(repo),changes=new SessionChangeService(repo),dispatch=new DispatchService(repo),session=new SessionService(repo,env.APP_MODE==='demo'),media=new MediaService(repo,env.MEDIA_ROOT,env.APP_MODE==='demo'),ops=new OperationsService(repo,env.APP_MODE==='demo'),account=new AccountService(repo),query=new QueryService(repo);
   router.get('/catalog',respond(async()=>({...await repo.config(),categories,serverTime:new Date().toISOString(),earliestStart:earliestStart(new Date()).toISOString(),mode:env.APP_MODE})));
   router.get('/demo/accounts',respond(async()=>{if(env.APP_MODE!=='demo')throw new AppError(404,'NOT_FOUND','Not found');return repo.db.query("SELECT name,role,replace(subject,'demo:','') AS handle FROM accounts WHERE subject LIKE 'demo:%' ORDER BY role,name");}));
   router.post('/shared/:token',respond(req=>media.sharedTickets(z.string().min(40).max(100).parse(req.params.token),z.object({pin:z.string().optional()}).parse(req.body).pin)));
-  router.get('/media/:id',async(req,res)=>{const download=req.query.download==='1';const {asset,filename}=await media.authorizedFile(id(req),z.string().max(2000).parse(req.query.ticket),download);res.setHeader('Cache-Control','private, no-store');res.setHeader('Referrer-Policy','no-referrer');if(download)res.download(filename,asset.filename);else res.type(asset.filename).sendFile(filename);});
+  router.get('/media/:id',async(req,res)=>{const download=req.query.download==='1';const {asset,filename}=await media.authorizedFile(id(req),z.string().max(2000).parse(req.query.ticket),download);res.setHeader('Cache-Control','private, no-store');res.setHeader('Referrer-Policy','no-referrer');if(download)res.download(filename,asset.filename);else res.type(path.extname(filename)).sendFile(filename);});
   // Streaming chunks require raw parsing before the JSON parser in app.ts.
   router.use(authentication(env,repo));
   const uid=(req:Parameters<typeof principal>[0])=>principal(req).account.id;
@@ -27,6 +29,11 @@ export function routes(repo:PlatformRepository,env:Env){
   router.post('/quotes',respond(req=>booking.quote(uid(req),req.body),201));router.post('/checkout',respond(req=>booking.checkout(uid(req),z.object({quoteId:z.uuid()}).parse(req.body).quoteId),201));
   router.post('/orders/:id/demo-pay',respond(async req=>{if(env.APP_MODE!=='demo')throw new AppError(404,'NOT_FOUND','Not found');const result=await booking.demoPay(uid(req),id(req));const roles=await repo.db.query('SELECT r.id FROM roles r JOIN sessions s ON s.id=r.session_id WHERE s.order_id=$1',[id(req)]) as {id:string}[];for(const r of roles)await dispatch.dispatch(r.id);return result;}));
   router.get('/orders',respond(req=>query.bookings(uid(req),page(req))));router.get('/orders/:id',respond(req=>repo.orderDetail(id(req),uid(req))));
+  router.get('/sessions/:id/changes',respond(req=>changes.list(uid(req),id(req))));
+  router.post('/sessions/:id/changes',respond(req=>changes.request(uid(req),id(req),req.body),201));
+  router.post('/changes/:id/dismiss',respond(req=>changes.dismiss(uid(req),id(req))));
+  router.post('/changes/:id/respond',respond(req=>changes.respond(uid(req),id(req),z.object({accepted:z.boolean()}).parse(req.body).accepted)));
+  router.post('/changes/:id/demo-apply',respond(req=>{if(env.APP_MODE!=='demo')throw new AppError(503,'PROVIDER_REQUIRED','Payment integration is not configured');return changes.applyDemo(uid(req),id(req),z.object({expectedDeltaPaise:z.number().int()}).parse(req.body).expectedDeltaPaise);}));
   router.get('/sessions/:id/cancellation',respond(req=>booking.cancelPreview(uid(req),id(req))));router.post('/sessions/:id/cancel',respond(req=>booking.cancel(uid(req),id(req),z.object({expectedFeePaise:z.number().int().nonnegative()}).parse(req.body).expectedFeePaise)));
   router.get('/sessions/:id/tracking',respond(req=>query.tracking(uid(req),id(req))));router.post('/sessions/:id/location',respond(req=>session.location(uid(req),id(req),req.body)));router.get('/sessions/:id/messages',respond(req=>query.messages(uid(req),id(req))));router.post('/sessions/:id/messages',respond(req=>account.message(uid(req),id(req),req.body),201));
   router.post('/sessions/:id/incidents',respond(req=>ops.incident(uid(req),id(req),req.body),201));router.post('/sessions/:id/ratings',respond(req=>account.rating(uid(req),id(req),req.body),201));

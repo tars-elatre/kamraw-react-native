@@ -10,6 +10,7 @@ import {createApp} from '../src/app';
 import {createDataSource} from '../src/db/data-source';
 import {seedDemo} from '../src/db/seed';
 import {PlatformRepository} from '../src/repositories/platform';
+import {SessionChangeService} from '../src/services/session-changes';
 import {BookingService} from '../src/services/bookings';
 import {DispatchService} from '../src/services/dispatch';
 import {SessionService} from '../src/services/sessions';
@@ -45,5 +46,28 @@ suite('PostgreSQL platform integration',()=>{
  });
  test('cancellation fees cannot change silently and cancellation is idempotent',async()=>{const x=await paid(16);const preview=await booking.cancelPreview(customer,x.session.id);await expect(booking.cancel(customer,x.session.id,preview.feePaise+1)).rejects.toMatchObject({code:'FEE_CHANGED'});const a=await booking.cancel(customer,x.session.id,preview.feePaise);const b=await booking.cancel(customer,x.session.id,preview.feePaise);expect(a.id).toBe(b.id);});
  test('demo settlements are explicitly labelled and idempotent',async()=>{await drainDemoOutbox(repo);await drainDemoOutbox(repo);const [r]=await db.query("SELECT count(*)::int AS n FROM payout_runs WHERE status='simulated_paid'");expect(r.n).toBe(1);const [refunds]=await db.query("SELECT count(*)::int AS n FROM refunds WHERE status='simulated_refunded'");expect(refunds.n).toBe(1);const [ledger]=await db.query("SELECT count(*)::int AS n FROM ledger_transactions WHERE reference LIKE 'demo-payout:%'");expect(ledger.n).toBe(1);});
+ test('reschedule is once-only, resets dispatch, preserves ownership and applies payment once',async()=>{
+   const x=await paid(30),svc=new SessionChangeService(repo);const offers=await dispatch.dispatch(x.role.id);const c=await db.getRepository(CreatorEntity).findOneByOrFail({id:offers[0]!.creatorId});await dispatch.accept(c.accountId,offers[0]!.id);
+   await expect(svc.request(creatorAccount,x.session.id,{kind:'reschedule',start:startFor(31)})).rejects.toMatchObject({code:'NOT_FOUND'});
+   const change=await svc.request(customer,x.session.id,{kind:'reschedule',start:startFor(31)});
+   await expect(svc.applyDemo(customer,change.id,change.delta_paise+1)).rejects.toMatchObject({code:'PRICE_CHANGED'});
+   await Promise.all([svc.applyDemo(customer,change.id,change.delta_paise),svc.applyDemo(customer,change.id,change.delta_paise)]);
+   expect((await repo.session(x.session.id)).startAt.toISOString()).toBe(startFor(31));expect((await repo.session(x.session.id)).status).toBe('confirmed');expect((await db.getRepository(RoleEntity).findOneByOrFail({id:x.role.id})).status).toBe('cancelled');
+   const roles=await db.getRepository(RoleEntity).findBy({sessionId:x.session.id,status:'confirmed'});expect(roles).toHaveLength(1);expect(roles[0]!.creatorId).toBeNull();expect((await dispatch.dispatch(roles[0]!.id)).length).toBeGreaterThan(0);
+   await expect(svc.request(customer,x.session.id,{kind:'reschedule',start:startFor(32)})).rejects.toMatchObject({code:'RESCHEDULE_USED'});
+   const close=await paid(1);await expect(svc.request(customer,close.session.id,{kind:'reschedule',start:startFor(35)})).rejects.toMatchObject({code:'RESCHEDULE_WINDOW'});
+ });
+ test('extension needs creator consent, conflict recheck and idempotent payment before changing time',async()=>{
+   const x=await paid(40),svc=new SessionChangeService(repo),offers=await dispatch.dispatch(x.role.id),c=await db.getRepository(CreatorEntity).findOneByOrFail({id:offers[0]!.creatorId});await dispatch.accept(c.accountId,offers[0]!.id);
+   await db.getRepository(SessionEntity).update(x.session.id,{status:'in_session'});await db.getRepository(RoleEntity).update(x.role.id,{status:'in_session'});const now=new Date(x.session.endAt.getTime()-20*60000);
+   const change=await svc.request(customer,x.session.id,{kind:'extension',blocks:1},now);
+   await expect(svc.applyDemo(customer,change.id,change.delta_paise,now)).rejects.toMatchObject({code:'AWAITING_CREATORS'});
+   await expect(svc.respond(customer,change.id,true,now)).rejects.toMatchObject({code:'NOT_FOUND'});await svc.respond(c.accountId,change.id,true,now);
+   const [block]=await db.query('INSERT INTO availability(creator_id,start_at,end_at,available) VALUES($1,$2,$3,false) RETURNING id',[c.id,new Date(x.session.endAt.getTime()+35*60000),new Date(x.session.endAt.getTime()+90*60000)]);
+   await expect(svc.applyDemo(customer,change.id,change.delta_paise,now)).rejects.toMatchObject({code:'EXTENSION_CONFLICT'});expect((await repo.session(x.session.id)).endAt).toEqual(x.session.endAt);await db.query('DELETE FROM availability WHERE id=$1',[block.id]);
+   await Promise.all([svc.applyDemo(customer,change.id,change.delta_paise,now),svc.applyDemo(customer,change.id,change.delta_paise,now)]);
+   expect((await repo.session(x.session.id)).endAt.getTime()).toBe(x.session.endAt.getTime()+30*60000);expect((await repo.order(x.order.id)).totalPaise).toBe(x.order.totalPaise+change.delta_paise);const [paidOnce]=await db.query('SELECT count(*)::int AS n FROM ledger_transactions WHERE reference=$1',[`demo-change:${change.id}`]);expect(paidOnce.n).toBe(1);
+   const declined=await svc.request(customer,x.session.id,{kind:'extension',blocks:1},now);await svc.respond(c.accountId,declined.id,false,now);await expect(svc.applyDemo(customer,declined.id,declined.delta_paise,now)).rejects.toMatchObject({code:'CHANGE_UNAVAILABLE'});
+ });
  test('database rejects modification of audit and unbalanced ledger',async()=>{await expect(db.query('UPDATE audit SET action=$1',['changed'])).rejects.toThrow('Append-only');await expect(db.transaction(async m=>{const [t]=await m.query('INSERT INTO ledger_transactions(reference) VALUES($1) RETURNING id',[randomUUID()]);await m.query('INSERT INTO ledger_entries(transaction_id,account,amount_paise) VALUES($1,$2,$3)',[t.id,'cash',100]);})).rejects.toThrow('not balanced');});
 });

@@ -28,9 +28,10 @@ export class DispatchService {
   async accept(accountId:string,offerId:string,now=new Date()){
     return this.repo.db.transaction(async m=>{
       const creator=await this.repo.creator(accountId,m);const offer=requireValue(await m.getRepository(OfferEntity).findOneBy({id:offerId,creatorId:creator.id}));
+      const initial=requireValue(await m.getRepository(RoleEntity).findOneBy({id:offer.roleId}));await m.getRepository(SessionEntity).findOne({where:{id:initial.sessionId},lock:{mode:'pessimistic_write'}});
       const role=requireValue(await m.getRepository(RoleEntity).findOne({where:{id:offer.roleId},lock:{mode:'pessimistic_write'}}));
       if(role.creatorId===creator.id&&offer.status==='accepted')return role;
-      if(role.creatorId||offer.status!=='pending'||offer.expiresAt<=now)throw new AppError(409,'OFFER_UNAVAILABLE','This offer has expired or another creator accepted it');
+      if(role.status!=='confirmed'||role.creatorId||offer.status!=='pending'||offer.expiresAt<=now)throw new AppError(409,'OFFER_UNAVAILABLE','This offer has expired or another creator accepted it');
       await m.getRepository(CreatorEntity).findOne({where:{id:creator.id},lock:{mode:'pessimistic_write'}});
       if(creator.status!=='active')throw new AppError(403,'NOT_ACTIVE','Your creator profile must be active');
       const blocks=await m.query('SELECT 1 FROM availability WHERE creator_id=$1 AND NOT available AND tstzrange(start_at,end_at) && tstzrange($2,$3)',[creator.id,role.reservedStart,role.reservedEnd]);if(blocks.length)throw new AppError(409,'UNAVAILABLE','Your availability changed');

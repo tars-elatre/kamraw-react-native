@@ -1,5 +1,5 @@
 import {randomInt} from 'node:crypto';
-import {bookingSchema,cancellation,pointInPolygon,quotePrice,validateSessionTime,type BookingInput,type RateCard} from '@kamraw/domain';
+import {bookingSchema,cancellation,pointInPolygon,quotePrice,validateSessionTime,type RateCard} from '@kamraw/domain';
 import {OrderEntity,QuoteEntity,RoleEntity,SessionEntity} from '../entities';
 import {AppError,requireValue} from '../middleware/errors';
 import {PlatformRepository} from '../repositories/platform';
@@ -70,5 +70,4 @@ export class BookingService {
     });
   }
   async demoPay(customerId:string,id:string){const order=await this.repo.ownedOrder(id,customerId);return this.confirmPayment({id:`demo:${id}`,orderId:id,amountPaise:order.totalPaise,currency:'INR',provider:'demo'});}
-  async reschedule(customerId:string,sessionId:string,body:BookingInput){const {session}=await this.repo.authorizedSession(sessionId,customerId);if(session.startAt.getTime()-Date.now()<=72*3600000)throw new AppError(409,'RESCHEDULE_WINDOW','Contact support for rescheduling within 72 hours');return this.quote(customerId,body);}
 }
