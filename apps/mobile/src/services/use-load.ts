@@ -1,0 +1,4 @@
+import {useCallback,useEffect,useState} from 'react';
+import {useSession} from './session';
+export function useLoad<T>(path:string){const {api}=useSession();const [data,setData]=useState<T|null>(null),[error,setError]=useState<string|null>(null),[loading,setLoading]=useState(true);const refresh=useCallback(async()=>{setLoading(true);setError(null);try{setData(await api<T>(path));}catch(e){setError((e as Error).message);}finally{setLoading(false);}},[path]);useEffect(()=>{void refresh();},[refresh]);return {data,setData,error,loading,refresh};}
+export function useAction(){const [busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null),[success,setSuccess]=useState<string|null>(null);const run=async(fn:()=>Promise<void>)=>{setBusy(true);setError(null);setSuccess(null);try{await fn();}catch(e){setError((e as Error).message);}finally{setBusy(false);}};return {busy,error,success,setSuccess,run};}

@@ -1,0 +1,51 @@
+import {Router,raw} from 'express';
+import {z} from 'zod';
+import {createHmac,timingSafeEqual} from 'node:crypto';
+import {PlatformRepository} from '../repositories/platform';
+import {BookingService} from '../services/bookings';
+import {DispatchService} from '../services/dispatch';
+import {SessionService} from '../services/sessions';
+import {MediaService} from '../services/media';
+import {OperationsService} from '../services/operations';
+import {AccountService} from '../services/accounts';
+import {QueryService} from '../services/queries';
+import {authentication,permit,principal} from '../middleware/auth';
+import {AppError} from '../middleware/errors';
+import {id,page,respond} from '../controllers/platform';
+import type {Env} from '../config/env';
+import {categories,earliestStart} from '@kamraw/domain';
+export function routes(repo:PlatformRepository,env:Env){
+  const router=Router(),booking=new BookingService(repo),dispatch=new DispatchService(repo),session=new SessionService(repo,env.APP_MODE==='demo'),media=new MediaService(repo,env.MEDIA_ROOT,env.APP_MODE==='demo'),ops=new OperationsService(repo,env.APP_MODE==='demo'),account=new AccountService(repo),query=new QueryService(repo);
+  router.get('/catalog',respond(async()=>({...await repo.config(),categories,serverTime:new Date().toISOString(),earliestStart:earliestStart(new Date()).toISOString(),mode:env.APP_MODE})));
+  router.get('/demo/accounts',respond(async()=>{if(env.APP_MODE!=='demo')throw new AppError(404,'NOT_FOUND','Not found');return repo.db.query("SELECT name,role,replace(subject,'demo:','') AS handle FROM accounts WHERE subject LIKE 'demo:%' ORDER BY role,name");}));
+  router.post('/shared/:token',respond(req=>media.sharedTickets(z.string().min(40).max(100).parse(req.params.token),z.object({pin:z.string().optional()}).parse(req.body).pin)));
+  router.get('/media/:id',async(req,res)=>{const download=req.query.download==='1';const {asset,filename}=await media.authorizedFile(id(req),z.string().max(2000).parse(req.query.ticket),download);res.setHeader('Cache-Control','private, no-store');res.setHeader('Referrer-Policy','no-referrer');if(download)res.download(filename,asset.filename);else res.type(asset.filename).sendFile(filename);});
+  // Streaming chunks require raw parsing before the JSON parser in app.ts.
+  router.use(authentication(env,repo));
+  const uid=(req:Parameters<typeof principal>[0])=>principal(req).account.id;
+  router.get('/me',respond(async req=>principal(req).account));router.put('/me',respond(req=>account.profile(uid(req),req.body)));router.post('/me/privacy',respond(req=>account.privacy(uid(req),req.body),201));
+  router.post('/quotes',respond(req=>booking.quote(uid(req),req.body),201));router.post('/checkout',respond(req=>booking.checkout(uid(req),z.object({quoteId:z.uuid()}).parse(req.body).quoteId),201));
+  router.post('/orders/:id/demo-pay',respond(async req=>{if(env.APP_MODE!=='demo')throw new AppError(404,'NOT_FOUND','Not found');const result=await booking.demoPay(uid(req),id(req));const roles=await repo.db.query('SELECT r.id FROM roles r JOIN sessions s ON s.id=r.session_id WHERE s.order_id=$1',[id(req)]) as {id:string}[];for(const r of roles)await dispatch.dispatch(r.id);return result;}));
+  router.get('/orders',respond(req=>query.bookings(uid(req),page(req))));router.get('/orders/:id',respond(req=>repo.orderDetail(id(req),uid(req))));
+  router.get('/sessions/:id/cancellation',respond(req=>booking.cancelPreview(uid(req),id(req))));router.post('/sessions/:id/cancel',respond(req=>booking.cancel(uid(req),id(req),z.object({expectedFeePaise:z.number().int().nonnegative()}).parse(req.body).expectedFeePaise)));
+  router.get('/sessions/:id/tracking',respond(req=>query.tracking(uid(req),id(req))));router.post('/sessions/:id/location',respond(req=>session.location(uid(req),id(req),req.body)));router.get('/sessions/:id/messages',respond(req=>query.messages(uid(req),id(req))));router.post('/sessions/:id/messages',respond(req=>account.message(uid(req),id(req),req.body),201));
+  router.post('/sessions/:id/incidents',respond(req=>ops.incident(uid(req),id(req),req.body),201));router.post('/sessions/:id/ratings',respond(req=>account.rating(uid(req),id(req),req.body),201));
+  router.get('/creator',respond(req=>query.creator(uid(req))));router.post('/creator/apply',respond(req=>account.onboard(uid(req),req.body),201));router.put('/creator/online',respond(req=>account.online(uid(req),z.object({online:z.boolean()}).parse(req.body).online)));router.post('/creator/availability',respond(req=>account.availability(uid(req),req.body),201));
+  router.get('/creator/offers',respond(req=>dispatch.offers(uid(req))));router.post('/creator/offers/:id/decline',respond(req=>dispatch.decline(uid(req),id(req))));router.post('/creator/offers/:id/accept',respond(req=>dispatch.accept(uid(req),id(req))));router.get('/creator/jobs',respond(req=>dispatch.jobs(uid(req))));router.get('/creator/earnings',respond(req=>query.earnings(uid(req))));router.post('/creator/roles/:id/events',respond(req=>session.transition(uid(req),id(req),req.body)));
+  router.post('/uploads',respond(req=>media.manifest(uid(req),req.body),201));router.get('/uploads/:id',respond(req=>query.upload(uid(req),id(req))));router.put('/assets/:id/chunks',raw({type:'application/octet-stream',limit:'8mb'}),respond(req=>media.chunk(uid(req),id(req),z.coerce.number().int().nonnegative().parse(req.query.offset),req.body)));router.post('/uploads/:id/receipt',respond(req=>media.receipt(uid(req),id(req))));
+  router.get('/galleries',respond(req=>query.galleries(uid(req))));router.get('/galleries/:id',respond(req=>media.gallery(uid(req),id(req))));router.post('/galleries/:id/shares',respond(req=>media.share(uid(req),id(req),req.body),201));router.get('/galleries/:id/shares',respond(req=>query.shares(uid(req),id(req))));router.delete('/shares/:id',respond(req=>query.revoke(uid(req),id(req))));
+  router.post('/shared-invite/:token',respond(req=>media.sharedTickets(z.string().min(40).parse(req.params.token),undefined,uid(req))));
+  router.post('/assets/:id/ticket',respond(req=>media.ownerTicket(uid(req),id(req))));
+  router.get('/assets/:id/file',async(req,res)=>{const {asset,filename}=await media.file(id(req));await media.gallery(uid(req),asset.gallery_id);res.setHeader('Cache-Control','private, no-store');res.download(filename,asset.filename);});
+  router.put('/assets/:id/favourite',respond(req=>query.favourite(uid(req),id(req),z.object({selected:z.boolean()}).parse(req.body).selected)));
+  router.get('/tickets',respond(req=>query.tickets(uid(req))));router.post('/tickets',respond(req=>account.ticket(uid(req),req.body),201));router.post('/tickets/:id/messages',respond(req=>query.ticketReply(uid(req),id(req),z.object({body:z.string().min(1).max(4000)}).parse(req.body).body)));
+  router.get('/payments',respond(req=>query.payments(uid(req))));router.post('/prints',respond(req=>account.prints(uid(req),req.body),201));router.get('/prints',respond(req=>query.printOrders(uid(req))));
+  router.get('/ops/incidents',permit('operations'),respond(()=>repo.db.query('SELECT i.*,o.code FROM incidents i JOIN sessions s ON s.id=i.session_id JOIN orders o ON o.id=s.order_id ORDER BY i.created_at DESC LIMIT 100')));router.get('/ops/dashboard',permit('operations'),respond(()=>ops.dashboard()));router.get('/ops/creators',permit('onboarding'),respond(()=>ops.creators()));router.put('/ops/creators/:id',permit('onboarding'),respond(req=>ops.reviewCreator(uid(req),id(req),req.body)));
+  router.post('/ops/roles/:id/dispatch',permit('dispatch'),respond(req=>dispatch.dispatch(id(req))));router.post('/ops/incidents/:id/acknowledge',permit('operations'),respond(req=>ops.acknowledge(uid(req),id(req))));
+  router.get('/ops/configurations',permit('config:write'),respond(()=>ops.configurations()));router.post('/ops/configurations',permit('config:write'),respond(req=>ops.propose(uid(req),req.body),201));router.post('/ops/configurations/:id/approve',permit('config:approve'),respond(req=>ops.approveConfig(uid(req),id(req))));
+  router.get('/ops/qc',permit('qc'),respond(()=>ops.qcQueue()));router.get('/ops/qc/:id/assets',permit('qc'),respond(req=>ops.qcAssets(id(req))));router.put('/ops/assets/:id/review',permit('qc'),respond(req=>ops.reviewAsset(uid(req),id(req),req.body)));router.post('/ops/galleries/:id/publish',permit('qc'),respond(req=>ops.publish(uid(req),id(req),req.body)));
+  router.get('/ops/tickets',permit('support'),respond(req=>query.tickets(uid(req),true)));router.post('/ops/tickets/:id/messages',permit('support'),respond(req=>query.ticketReply(uid(req),id(req),z.object({body:z.string().min(1).max(4000)}).parse(req.body).body,true)));
+  router.get('/ops/finance',permit('finance'),respond(()=>ops.finance()));router.post('/ops/payouts',permit('payout:create'),respond(req=>ops.generatePayout(uid(req)),201));router.post('/ops/payouts/:id/approve',permit('payout:approve'),respond(req=>ops.approvePayout(uid(req),id(req))));router.get('/ops/audit',permit('audit'),respond(()=>ops.audit()));
+  return router;
+}
+export function webhook(repo:PlatformRepository,env:Env){return respond(async req=>{if(!env.PAYMENT_WEBHOOK_SECRET)throw new AppError(503,'PROVIDER_REQUIRED','Payment webhooks are not configured');const received=req.headers['x-kamraw-signature'];if(typeof received!=='string'||!/^[a-f0-9]{64}$/.test(received)||!Buffer.isBuffer(req.body))throw new AppError(401,'BAD_SIGNATURE','Invalid webhook signature');const expected=createHmac('sha256',env.PAYMENT_WEBHOOK_SECRET).update(req.body).digest();if(!timingSafeEqual(expected,Buffer.from(received,'hex')))throw new AppError(401,'BAD_SIGNATURE','Invalid webhook signature');const event=z.object({id:z.string().min(1).max(100),orderId:z.uuid(),amountPaise:z.number().int().positive(),currency:z.literal('INR'),provider:z.string().min(1)}).parse(JSON.parse(req.body.toString()));return new BookingService(repo).confirmPayment(event);});}

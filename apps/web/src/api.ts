@@ -1,0 +1,6 @@
+export const base=import.meta.env.VITE_API_URL||'http://localhost:4000';
+export async function request<T>(path:string,token:string|null,body?:unknown,method=body===undefined?'GET':'POST'):Promise<T>{const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),20000);try{const res=await fetch(`${base}/api${path}`,{method,signal:ctrl.signal,headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{})},body:body===undefined?undefined:JSON.stringify(body)});const data=await res.json();if(!res.ok)throw new Error(data.error?.message??'Request failed');return data.data as T;}catch(e){if(e instanceof TypeError)throw new Error('Connection lost. Check your network and try again.');throw e;}finally{clearTimeout(timer);}}
+export interface User {id:string;name:string;role:string}
+export interface Dashboard {stats:{active_sessions:number;online_creators:number;open_roles:number;incidents:number;collections_paise:string};bookings:{id:string;code:string;category:string;start_at:string;status:string;zone_id:string;open_roles:number}[];alerts:{id:string;kind:string;entity_id:string;created_at:string}[]}
+export const title=(s:string)=>s.replaceAll('_',' ');
+export const when=(s:string)=>new Date(s).toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});

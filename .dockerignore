@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.expo
+**/.expo
+.local
+tmp
+coverage
+**/coverage

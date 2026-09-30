@@ -1,0 +1,284 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Kamraw demo - one application server, private encrypted PostgreSQL, HTTPS and OIDC deployment
+Parameters:
+  DomainName:
+    Type: String
+    Default: demo.kamraw.com
+    AllowedPattern: '[a-z0-9.-]+'
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+  GitHubRepository:
+    Type: String
+    Default: tars-elatre/kamraw-react-native
+  LatestAmi:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+Resources:
+  Network:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{Key: Name, Value: kamraw-demo}]
+  Gateway:
+    Type: AWS::EC2::InternetGateway
+  Attachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: {VpcId: !Ref Network, InternetGatewayId: !Ref Gateway}
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Network
+      CidrBlock: 10.42.0.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false
+  DatabaseSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Network
+      CidrBlock: 10.42.10.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false
+  DatabaseSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Network
+      CidrBlock: 10.42.11.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: false
+  PublicRoutes:
+    Type: AWS::EC2::RouteTable
+    Properties: {VpcId: !Ref Network}
+  InternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: Attachment
+    Properties: {RouteTableId: !Ref PublicRoutes, DestinationCidrBlock: 0.0.0.0/0, GatewayId: !Ref Gateway}
+  PublicRouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: {SubnetId: !Ref PublicSubnet, RouteTableId: !Ref PublicRoutes}
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public HTTPS and ACME only; administration through SSM
+      VpcId: !Ref Network
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: HTTPS}
+        - {IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0, Description: HTTPS redirect and ACME}
+      SecurityGroupEgress:
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: AWS APIs and package downloads}
+        - {IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0, Description: Amazon Linux package mirrors}
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: PostgreSQL from Kamraw application only
+      VpcId: !Ref Network
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 5432, ToPort: 5432, SourceSecurityGroupId: !Ref AppSecurityGroup}
+      SecurityGroupEgress:
+        - {IpProtocol: tcp, FromPort: 1, ToPort: 1, CidrIp: 127.0.0.1/32, Description: No initiated outbound connections}
+  DatabaseEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties: {GroupId: !Ref AppSecurityGroup, IpProtocol: tcp, FromPort: 5432, ToPort: 5432, DestinationSecurityGroupId: !Ref DatabaseSecurityGroup}
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Private database subnets with no internet route
+      SubnetIds: [!Ref DatabaseSubnetA, !Ref DatabaseSubnetB]
+  DatabaseParameters:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: Require encrypted PostgreSQL connections
+      Family: postgres16
+      Parameters: {rds.force_ssl: '1', log_min_duration_statement: '-1', log_statement: none}
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBName: kamraw
+      Engine: postgres
+      # AWS-reported default PostgreSQL 16 release at deployment inspection.
+      EngineVersion: '16.13'
+      DBInstanceClass: db.t4g.micro
+      AllocatedStorage: '20'
+      MaxAllocatedStorage: 40
+      StorageType: gp3
+      StorageEncrypted: true
+      MasterUsername: kamraw_admin
+      ManageMasterUserPassword: true
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      DBParameterGroupName: !Ref DatabaseParameters
+      VPCSecurityGroups: [!Ref DatabaseSecurityGroup]
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: 1 # Free account plan restriction; production requires at least seven days.
+      CopyTagsToSnapshot: true
+      AutoMinorVersionUpgrade: true
+      DeletionProtection: true
+      EnablePerformanceInsights: true
+      PerformanceInsightsRetentionPeriod: 7
+      EnableCloudwatchLogsExports: [postgresql]
+      Tags: [{Key: Project, Value: Kamraw}, {Key: Environment, Value: demo}, {Key: created_by, Value: rds-oss-skill}, {Key: generation_model, Value: gpt-6}]
+  ApplicationSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: Restricted Kamraw PostgreSQL application role
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"kamraw_app"}'
+        GenerateStringKey: password
+        PasswordLength: 40
+        ExcludePunctuation: true
+  Repository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: kamraw-demo
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration: {ScanOnPush: true}
+      EncryptionConfiguration: {EncryptionType: AES256}
+      LifecyclePolicy:
+        LifecyclePolicyText: '{"rules":[{"rulePriority":1,"description":"Keep ten releases","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":10},"action":{"type":"expire"}}]}'
+  Artifacts:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption: {ServerSideEncryptionConfiguration: [{ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}}]}
+      PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
+      OwnershipControls: {Rules: [{ObjectOwnership: BucketOwnerEnforced}]}
+      VersioningConfiguration: {Status: Enabled}
+      LifecycleConfiguration: {Rules: [{Id: BuildArtifacts, Status: Enabled, ExpirationInDays: 30, NoncurrentVersionExpiration: {NoncurrentDays: 7}}]}
+  ArtifactPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Artifacts
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource: [!GetAtt Artifacts.Arn, !Sub '${Artifacts.Arn}/*']
+            Condition: {Bool: {aws:SecureTransport: false}}
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: /kamraw/demo, RetentionInDays: 14}
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement: [{Effect: Allow, Principal: {Service: ec2.amazonaws.com}, Action: 'sts:AssumeRole'}]
+      ManagedPolicyArns: [!Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore']
+      Policies:
+        - PolicyName: KamrawRuntime
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - {Effect: Allow, Action: 'secretsmanager:GetSecretValue', Resource: [!Ref ApplicationSecret, !GetAtt Database.MasterUserSecret.SecretArn]}
+              - {Effect: Allow, Action: 'ecr:GetAuthorizationToken', Resource: '*'}
+              - Effect: Allow
+                Action: ['ecr:BatchGetImage', 'ecr:GetDownloadUrlForLayer', 'ecr:BatchCheckLayerAvailability', 'ecr:InitiateLayerUpload', 'ecr:UploadLayerPart', 'ecr:CompleteLayerUpload', 'ecr:PutImage']
+                Resource: !GetAtt Repository.Arn
+              - {Effect: Allow, Action: 's3:GetObject', Resource: !Sub '${Artifacts.Arn}/*'}
+              - {Effect: Allow, Action: ['logs:CreateLogStream', 'logs:PutLogEvents'], Resource: !GetAtt LogGroup.Arn}
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties: {Roles: [!Ref InstanceRole]}
+  Server:
+    Type: AWS::EC2::Instance
+    DependsOn: InternetRoute
+    Properties:
+      ImageId: !Ref LatestAmi
+      InstanceType: t4g.small
+      IamInstanceProfile: !Ref InstanceProfile
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds: [!Ref AppSecurityGroup]
+      MetadataOptions: {HttpTokens: required, HttpPutResponseHopLimit: 2, HttpEndpoint: enabled}
+      BlockDeviceMappings: [{DeviceName: /dev/xvda, Ebs: {VolumeSize: 20, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true}}]
+      Tags: [{Key: Name, Value: kamraw-demo}, {Key: Project, Value: Kamraw}]
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+          # Elastic IP association can follow instance startup.
+          for attempt in $(seq 1 20); do dnf install -y docker jq && break; sleep 15; done
+          systemctl enable --now docker
+          mkdir -p /opt/kamraw/media /opt/kamraw/caddy
+          chown 1000:1000 /opt/kamraw/media
+          cat > /opt/kamraw/runtime.env <<'CONFIG'
+          APP_MODE=demo
+          NODE_ENV=production
+          AWS_REGION=${AWS::Region}
+          DB_HOST=${Database.Endpoint.Address}
+          DATABASE_SSL=true
+          DB_SECRET_ARN=${ApplicationSecret}
+          WEB_ORIGIN=https://${DomainName}
+          PUBLIC_API_URL=https://${DomainName}
+          CONFIG
+          chmod 600 /opt/kamraw/runtime.env
+          cat > /opt/kamraw/deployment.env <<'CONFIG'
+          DB_ADMIN_SECRET_ARN=${Database.MasterUserSecret.SecretArn}
+          ECR_URI=${Repository.RepositoryUri}
+          ARTIFACT_BUCKET=${Artifacts}
+          AWS_REGION=${AWS::Region}
+          DOMAIN=${DomainName}
+          CONFIG
+          chmod 600 /opt/kamraw/deployment.env
+  Address:
+    Type: AWS::EC2::EIP
+    DependsOn: Attachment
+    Properties: {Domain: vpc, Tags: [{Key: Name, Value: kamraw-demo}]}
+  AddressAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties: {InstanceId: !Ref Server, AllocationId: !GetAtt Address.AllocationId}
+  DNS:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: A
+      TTL: '300'
+      ResourceRecords: [!Ref Address]
+  OIDC:
+    Type: AWS::IAM::OIDCProvider
+    Properties: {Url: 'https://token.actions.githubusercontent.com', ClientIdList: [sts.amazonaws.com]}
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Federated: !Ref OIDC}
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubRepository}:ref:refs/heads/main'
+      Policies:
+        - PolicyName: DeployOnlyKamraw
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - {Effect: Allow, Action: 'ecr:GetAuthorizationToken', Resource: '*'}
+              - Effect: Allow
+                Action: ['ecr:BatchCheckLayerAvailability', 'ecr:InitiateLayerUpload', 'ecr:UploadLayerPart', 'ecr:CompleteLayerUpload', 'ecr:PutImage', 'ecr:BatchGetImage', 'ecr:GetDownloadUrlForLayer']
+                Resource: !GetAtt Repository.Arn
+              - {Effect: Allow, Action: 's3:PutObject', Resource: !Sub '${Artifacts.Arn}/releases/*'}
+              - Effect: Allow
+                Action: ssm:SendCommand
+                Resource: [!Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript', !Sub 'arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${Server}']
+              - {Effect: Allow, Action: 'ssm:GetCommandInvocation', Resource: '*'}
+Outputs:
+  Url: {Value: !Sub 'https://${DomainName}'}
+  InstanceId: {Value: !Ref Server}
+  RepositoryUri: {Value: !GetAtt Repository.RepositoryUri}
+  ArtifactBucket: {Value: !Ref Artifacts}
+  DeployRoleArn: {Value: !GetAtt DeployRole.Arn}
+  DatabaseEndpoint: {Value: !GetAtt Database.Endpoint.Address}

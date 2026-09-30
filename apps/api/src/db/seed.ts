@@ -1,0 +1,16 @@
+import 'dotenv/config';
+import {createDataSource} from './data-source';
+import {AccountEntity,ConfigEntity,CreatorEntity} from '../entities';
+import type {DataSource} from 'typeorm';
+import type {RateCard,Zone} from '@kamraw/domain';
+export async function seedDemo(db:DataSource){
+  const accounts=[['customer','Meena · demo','customer'],['creator','Karthik · demo','creator'],['creator2','Senthil · demo','creator'],['creator3','Farhan · demo','creator'],['ops','Operations · demo','super_admin'],['finance','Finance maker · demo','finance'],['approver','Finance approver · demo','finance_approver']];
+  for(const [handle,name,role] of accounts)await db.getRepository(AccountEntity).upsert({subject:`demo:${handle}`,name,role,language:'en',consents:{marketing:false,portfolio:false,guardian:false}},['subject']);
+  const maker=await db.getRepository(AccountEntity).findOneByOrFail({subject:'demo:ops'}),approver=await db.getRepository(AccountEntity).findOneByOrFail({subject:'demo:approver'});
+  const rates:RateCard={version:1,rates:{'photo:T1':{hourPaise:149900,earningHourPaise:95000},'photo:T2':{hourPaise:249900,earningHourPaise:160000},'video:T2':{hourPaise:299900,earningHourPaise:190000},'video:T3':{hourPaise:449900,earningHourPaise:290000}},addons:{'Express preview':99900,'Raw files':149900,'Extra edited images':49900},taxBps:1800,urgencyBps:1000,peakBps:2000,peakCapPaise:500000,earlyBps:500,peakDates:[],cancellationBps:[0,2500,5000,7500,10000],retentionDays:365};
+  const zones:Zone[]=[{id:'chennai-pilot',name:'Chennai demo zone',polygon:[{lat:12.8,lng:80.05},{lat:13.25,lng:80.05},{lat:13.25,lng:80.34},{lat:12.8,lng:80.34}],active:true,onDemand:true,leadMinutes:120,feePaise:0,openHour:4,closeHour:22}];
+  for(const [kind,value] of [['rates',rates],['zones',zones]] as const)if(!await db.getRepository(ConfigEntity).countBy({kind}))await db.getRepository(ConfigEntity).save({kind,version:1,value,status:'active',createdBy:maker.id,approvedBy:approver.id});
+  for(const [i,handle] of ['creator','creator2','creator3'].entries()){const account=await db.getRepository(AccountEntity).findOneByOrFail({subject:`demo:${handle}`});if(!await db.getRepository(CreatorEntity).countBy({accountId:account.id}))await db.getRepository(CreatorEntity).save({accountId:account.id,name:account.name,status:'active',online:true,disciplines:{photo:'T1',video:i===2?'T3':'T2'},zoneIds:['chennai-pilot'],languages:['ta','en'],profile:{bio:'Sample creator for sandbox testing only',experience:4,gear:[]},checks:{kyc:true,bank:true,background:true,gear:true,portfolio:true,trial:true,training:true,agreement:true},metrics:{rating:4.8,reliability:.98,qc:.96,recentJobs:i,acceptance:.9,etaMinutes:20+i*5,nextProximity:.7}});}
+}
+async function main(){if(process.env.APP_MODE!=='demo')throw new Error('Seed is restricted to explicit demo mode');if(!process.env.DATABASE_URL)throw new Error('DATABASE_URL required');const db=createDataSource(process.env.DATABASE_URL,process.env.DATABASE_SSL==='true');await db.initialize();try{await seedDemo(db);console.log('Demo accounts and illustrative pricing seeded');}finally{await db.destroy();}}
+if(require.main===module)void main().catch(()=>{console.error('Demo seed failed');process.exit(1);});

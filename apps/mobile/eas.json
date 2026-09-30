@@ -1,0 +1,1 @@
+{"build":{"development":{"developmentClient":true,"distribution":"internal","env":{"EXPO_PUBLIC_APP_MODE":"demo"}},"preview":{"distribution":"internal","env":{"EXPO_PUBLIC_APP_MODE":"demo"}},"production":{"autoIncrement":true,"env":{"EXPO_PUBLIC_APP_MODE":"live"}},"creator":{"extends":"production","env":{"APP_VARIANT":"creator","EXPO_PUBLIC_APP_MODE":"live"}}}}

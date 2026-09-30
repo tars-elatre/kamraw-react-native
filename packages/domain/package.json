@@ -1,0 +1,1 @@
+{"name":"@kamraw/domain","version":"1.0.0","private":true,"main":"dist/index.js","types":"dist/index.d.ts","scripts":{"build":"tsc","typecheck":"tsc --noEmit","test":"jest --runInBand"},"dependencies":{"zod":"^4.1.12"},"jest":{"preset":"ts-jest","testEnvironment":"node","testMatch":["**/*.test.ts"]}}

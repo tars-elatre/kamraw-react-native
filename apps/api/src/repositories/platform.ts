@@ -1,0 +1,18 @@
+import {EntityManager,DataSource} from 'typeorm';
+import {AccountEntity,ConfigEntity,CreatorEntity,OrderEntity,QuoteEntity,RoleEntity,SessionEntity} from '../entities';
+import {requireValue,AppError} from '../middleware/errors';
+import {assertBalanced,type RateCard,type Zone} from '@kamraw/domain';
+export class PlatformRepository {
+  constructor(public db:DataSource){}
+  async config(m:EntityManager=this.db.manager){const values=await m.getRepository(ConfigEntity).findBy({status:'active'});const rates=values.find(x=>x.kind==='rates'),zones=values.find(x=>x.kind==='zones');if(!rates||!zones)throw new AppError(503,'SETUP_REQUIRED','Approved pricing and service zones are not available yet');return {rates:rates.value as RateCard,zones:zones.value as Zone[]};}
+  async account(id:string,m=this.db.manager){return requireValue(await m.getRepository(AccountEntity).findOneBy({id}));}
+  async creator(accountId:string,m=this.db.manager){return requireValue(await m.getRepository(CreatorEntity).findOneBy({accountId}),'Creator profile not found');}
+  async order(id:string,m=this.db.manager){return requireValue(await m.getRepository(OrderEntity).findOneBy({id}));}
+  async session(id:string,m=this.db.manager){return requireValue(await m.getRepository(SessionEntity).findOneBy({id}));}
+  async authorizedSession(id:string,accountId:string,staff=false,m=this.db.manager){const s=await this.session(id,m),order=await this.order(s.orderId,m);if(!staff&&order.customerId!==accountId){const c=await m.getRepository(CreatorEntity).findOneBy({accountId});const roles=c?await m.getRepository(RoleEntity).countBy({sessionId:id,creatorId:c.id}):0;if(!roles)throw new AppError(404,'NOT_FOUND','Session not found');}return {session:s,order};}
+  async ownedOrder(id:string,accountId:string,m=this.db.manager){const order=await this.order(id,m);if(order.customerId!==accountId)throw new AppError(404,'NOT_FOUND','Booking not found');return order;}
+  async orderDetail(id:string,accountId:string){const order=await this.ownedOrder(id,accountId);const sessions=await this.db.getRepository(SessionEntity).createQueryBuilder('s').addSelect('s.completionCode').where('s.orderId=:id',{id}).orderBy('s.startAt','ASC').getMany();const roles=await this.db.query('SELECT r.*,c.name AS creator_name,c.languages,c.metrics FROM roles r JOIN sessions s ON s.id=r.session_id LEFT JOIN creators c ON c.id=r.creator_id WHERE s.order_id=$1',[id]);const quote=await this.db.getRepository(QuoteEntity).findOneBy({id:order.quoteId});return {...order,sessions,roles,price:quote?.price};}
+  async audit(m:EntityManager,actor:string|null,action:string,entity:string,details:object={}){await m.query('INSERT INTO audit(actor_id,action,entity_id,details) VALUES($1,$2,$3,$4)',[actor,action,entity,JSON.stringify(details)]);}
+  async event(m:EntityManager,kind:string,id:string,payload:object={}){await m.query('INSERT INTO outbox(kind,entity_id,payload) VALUES($1,$2,$3)',[kind,id,JSON.stringify(payload)]);}
+  async ledger(m:EntityManager,reference:string,orderId:string|null,entries:{account:string;amountPaise:number}[]){assertBalanced(entries);const [tx]=await m.query('INSERT INTO ledger_transactions(reference,order_id) VALUES($1,$2) RETURNING id',[reference,orderId]) as {id:string}[];for(const e of entries.filter(e=>e.amountPaise!==0))await m.query('INSERT INTO ledger_entries(transaction_id,account,amount_paise) VALUES($1,$2,$3)',[tx!.id,e.account,e.amountPaise]);}
+}
