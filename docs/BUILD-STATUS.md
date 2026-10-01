@@ -5,7 +5,7 @@ Source: supplied Kamraw_PRD_v1.0.pdf, 57 pages. User authorized full implementat
 ## Verified through 1 October 2026
 
 - Target repository: tars-elatre/kamraw-react-native. Connector writes returned 403; user authorized local CLI login. Repository operations explicitly use the authenticated tars-elatre CLI identity with push permission without changing another active local account.
-- TypeScript, ESLint, domain tests (22), PostgreSQL integration tests (42), mobile component/offline/transport tests (20), API/web builds and Expo Android/iOS/web exports passed.
+- TypeScript, ESLint, domain tests (22), PostgreSQL integration tests (42), mobile component/offline/transport tests (24), API/web builds and Expo Android/iOS/web exports passed.
 - Docker image built and ran successfully against local PostgreSQL. `/ready` and packaged web returned HTTP 200. The read-only wallet/export verification container also served `/app` and the authenticated credits API successfully on 1 October.
 - Customer browser test completed sign-in, scheduling, quote review and simulated checkout, creating local demo booking KMR-10001. Phone-size layout inspected at 390 × 844.
 - Dependency security patches applied; npm audit reported zero vulnerabilities after installation.
@@ -50,4 +50,6 @@ BR-19 matching now prioritizes eligible creators who meet the requested language
 
 Unmet preferences create a customer review and English/Tamil notification. All crew members must wait for the current reviews before starting travel. Customers can explicitly accept the disclosed assignment or cancel the session without a fee. Reassignment invalidates prior consent; stale review identifiers and backdated trip events are rejected. Decisions and refunds are idempotent, and preference decisions are included in customer privacy exports. Existing active assignments are backfilled by a forward migration.
 
-84 tests passed (domain 22, API/PostgreSQL 42, mobile 20), as did type checking, lint, API/web builds and all-platform Expo exports. Local browser QA created KMR-10004 with Hindi and female-creator preferences, accepted its offer from the creator app, verified the disabled trip button, previewed a full fee-free refund, and accepted the disclosed assignment in the customer app. Release verification is pending.
+88 tests passed (domain 22, API/PostgreSQL 42, mobile 24), as did type checking, lint, API/web builds and all-platform Expo exports. Local browser QA created KMR-10004 with Hindi and female-creator preferences, accepted its offer from the creator app, verified the disabled trip button, previewed a full fee-free refund, and accepted the disclosed assignment in the customer app. Release verification is pending.
+
+Mobile API configuration accepts either the server origin or an address ending in `/api`, preventing duplicate `/api/api` requests. Four transport tests cover both forms, trailing slashes and surrounding spaces.
