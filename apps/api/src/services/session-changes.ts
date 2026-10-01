@@ -43,7 +43,7 @@ export class SessionChangeService {
       await this.repo.audit(m,customerId,`${b.kind}_requested`,s.id,{changeId:change.id,deltaPaise:change.delta_paise});await this.repo.event(m,`${b.kind}_requested`,s.id,{changeId:change.id});return change;
     });
   }
-  async dismiss(customerId:string,id:string){const rows=await this.repo.db.query("UPDATE session_changes SET status='dismissed' WHERE id=$1 AND customer_id=$2 AND status='pending' RETURNING id",[id,customerId]);if(!rows.length)throw new AppError(409,'CHANGE_UNAVAILABLE','This change is no longer pending');return {dismissed:true};}
+  async dismiss(customerId:string,id:string){const [rows]=await this.repo.db.query("UPDATE session_changes SET status='dismissed' WHERE id=$1 AND customer_id=$2 AND status='pending' RETURNING id",[id,customerId]);if(!rows.length)throw new AppError(409,'CHANGE_UNAVAILABLE','This change is no longer pending');return {dismissed:true};}
   async respond(accountId:string,id:string,accepted:boolean,now=new Date()){
     return this.repo.db.transaction(async m=>{
       const c=await this.repo.creator(accountId,m),[change]=await m.query('SELECT * FROM session_changes WHERE id=$1 FOR UPDATE',[id]) as Change[];const x=requireValue(change);
