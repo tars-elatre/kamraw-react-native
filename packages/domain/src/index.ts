@@ -79,10 +79,17 @@ export function cancellation(total:number,start:Date,now:Date,status:Status,band
   const bps=platformFault?0:['arrived','in_session'].includes(status)?bands[4]:status==='en_route'||h<2?bands[3]:h<24?bands[2]:h<=72?bands[1]:bands[0];
   const feePaise=Math.round(total*bps/10000);return {feePaise,refundPaise:total-feePaise,feeBps:bps};
 }
-export interface Candidate {id:string;disciplines:Partial<Record<Discipline,Tier>>;active:boolean;online:boolean;zoneIds:string[];rating:number;reliability:number;qc:number;recentJobs:number;acceptance:number;etaMinutes:number;nextProximity:number;blocked:boolean;available:boolean}
+export type MatchingPreferences = SessionInput['preferences'];
+export function unmetPreferences(preferences:MatchingPreferences,creator:{languages?:string[];gender?:unknown}): ('language'|'femaleCreator')[] {
+  const unmet:('language'|'femaleCreator')[]=[];
+  if(preferences.language&&!creator.languages?.includes(preferences.language))unmet.push('language');
+  if(preferences.femaleCreator&&creator.gender!=='female')unmet.push('femaleCreator');
+  return unmet;
+}
+export interface Candidate {languages?:string[];gender?:unknown;id:string;disciplines:Partial<Record<Discipline,Tier>>;active:boolean;online:boolean;zoneIds:string[];rating:number;reliability:number;qc:number;recentJobs:number;acceptance:number;etaMinutes:number;nextProximity:number;blocked:boolean;available:boolean}
 export function dispatchScore(c:Candidate) {return (1-Math.min(c.etaMinutes,80)/80)*.3+c.reliability*.2+(c.rating/5)*.15+c.qc*.15+(1/(1+c.recentJobs))*.1+c.acceptance*.05+c.nextProximity*.05;}
-export function eligibleCandidates(candidates:Candidate[],role:{discipline:Discipline;tier:Tier},mode:SessionInput['mode'],zoneId:string) {
-  return candidates.filter(c=>c.active&&c.available&&!c.blocked&&(mode!=='on_demand'||c.online)&&c.zoneIds.includes(zoneId)&&c.disciplines[role.discipline]===role.tier&&c.etaMinutes<=80).sort((a,b)=>dispatchScore(b)-dispatchScore(a)||a.id.localeCompare(b.id));
+export function eligibleCandidates(candidates:Candidate[],role:{discipline:Discipline;tier:Tier},mode:SessionInput['mode'],zoneId:string,preferences:MatchingPreferences={femaleCreator:false}) {
+  return candidates.filter(c=>c.active&&c.available&&!c.blocked&&(mode!=='on_demand'||c.online)&&c.zoneIds.includes(zoneId)&&c.disciplines[role.discipline]===role.tier&&c.etaMinutes<=80).sort((a,b)=>unmetPreferences(preferences,a).length-unmetPreferences(preferences,b).length||dispatchScore(b)-dispatchScore(a)||a.id.localeCompare(b.id));
 }
 export function safeToFormat(files:{bytes:number;checksum:string;verifiedChecksum:string|null;copies:number;status:string}[],expectedCount:number,expectedBytes:number) {
   return expectedCount>0&&files.length===expectedCount&&files.reduce((t,f)=>t+f.bytes,0)===expectedBytes&&files.every(f=>f.status==='verified'&&f.checksum===f.verifiedChecksum&&f.copies>=2);

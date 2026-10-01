@@ -1,3 +1,4 @@
+import {PreferenceService} from '../src/services/preferences';
 import request from 'supertest';
 import {AuthenticationService} from '../src/services/authentication';
 import sharp from 'sharp';
@@ -267,6 +268,53 @@ suite('PostgreSQL platform integration',()=>{
    const x=await paid(171),c=await repo.creator(creatorAccount),svc=new SessionService(repo,true);await db.getRepository(RoleEntity).update(x.role.id,{creatorId:c.id,status:'assigned'});
    const event=(action:string,at:Date)=>({clientId:randomUUID(),action,deviceAt:at.toISOString(),location:{...x.session.input.venue,accuracy:5},identityProof:'demo-selfie'});await svc.transition(c.accountId,x.role.id,event('trip',x.session.startAt),x.session.startAt);const earlier=new Date(x.session.startAt.getTime()-60000);await expect(svc.transition(c.accountId,x.role.id,event('check_in',earlier),x.session.startAt)).rejects.toMatchObject({code:'EVENT_ORDER'});
    const late=new Date(x.session.startAt.getTime()+30*60000);await expect(svc.transition(c.accountId,x.role.id,event('check_in',late),late)).rejects.toMatchObject({code:'NO_SHOW_WINDOW'});expect((await db.query('SELECT id FROM customer_credits WHERE reference=$1',[`late-arrival:${x.session.id}`]))).toHaveLength(0);
+ });
+
+ test('preference matching offers full matches first then discloses fallback with free cancellation',async()=>{
+   const svc=new PreferenceService(repo),x=await paid(175),creators=await db.getRepository(CreatorEntity).findBy({status:'active'}),preferred=creators[2]!;
+   await svc.updateProfile(preferred.accountId,{languages:['hi'],gender:'female'});
+   try{
+    await db.getRepository(SessionEntity).update(x.session.id,{input:{...x.session.input,mode:'on_demand',preferences:{language:'hi',femaleCreator:true}}});
+    const first=await dispatch.dispatch(x.role.id);expect(first.map(o=>o.creatorId)).toEqual([preferred.id]);
+    await db.query("UPDATE offers SET status='declined' WHERE id=$1",[first[0]!.id]);
+    const fallback=await dispatch.dispatch(x.role.id);expect(fallback).toHaveLength(2);
+    const c=await db.getRepository(CreatorEntity).findOneByOrFail({id:fallback[0]!.creatorId});await dispatch.accept(c.accountId,fallback[0]!.id);
+    const detail=await svc.detail(customer,x.session.id);expect(detail.canCancelFree).toBe(true);expect(detail.roles[0].unmet).toEqual(['language','femaleCreator']);expect(JSON.stringify(detail)).not.toContain('gender');
+    const at=new Date(x.session.startAt.getTime()-3600000),event={action:'trip',clientId:randomUUID(),deviceAt:at.toISOString(),location:{...x.session.input.venue,accuracy:5}};
+    await expect(new SessionService(repo,true).transition(c.accountId,x.role.id,event,at)).rejects.toMatchObject({code:'PREFERENCE_REVIEW_REQUIRED'});
+    expect((await booking.cancelPreview(customer,x.session.id,at)).feePaise).toBe(0);
+    const refunds=await Promise.all([booking.cancel(customer,x.session.id,0,at),booking.cancel(customer,x.session.id,0,at)]);expect(refunds[0].id).toBe(refunds[1].id);expect(refunds[0].amount_paise).toBe(x.session.totalPaise);
+    expect(await db.query('SELECT id FROM creator_compensation WHERE role_id=$1',[x.role.id])).toHaveLength(0);
+   }finally{await svc.updateProfile(preferred.accountId,{languages:preferred.languages,gender:null});}
+ });
+ test('customer acceptance is private, idempotent and replacement requires fresh preference consent',async()=>{
+   const svc=new PreferenceService(repo),x=await paid(176);await db.getRepository(SessionEntity).update(x.session.id,{input:{...x.session.input,preferences:{femaleCreator:true,language:'hi'}}});
+   const offers=await dispatch.dispatch(x.role.id),c=await db.getRepository(CreatorEntity).findOneByOrFail({id:offers[0]!.creatorId});await dispatch.accept(c.accountId,offers[0]!.id);
+   const detail=await svc.detail(customer,x.session.id),reviewIds=detail.roles.map((r:{reviewId:string})=>r.reviewId),at=new Date(x.session.startAt.getTime()-8*3600000);
+   await expect(svc.accept(c.accountId,x.session.id,{reviewIds},at)).rejects.toMatchObject({code:'NOT_FOUND'});
+   await expect(svc.detail(approver,x.session.id)).rejects.toMatchObject({code:'NOT_FOUND'});
+   await Promise.all([svc.accept(customer,x.session.id,{reviewIds},at),svc.accept(customer,x.session.id,{reviewIds},at)]);
+   expect((await db.query("SELECT id FROM audit WHERE action='preferences_accepted' AND entity_id=$1",[x.session.id]))).toHaveLength(1);
+   expect((await booking.cancelPreview(customer,x.session.id,at)).feeBps).toBe(5000);
+   const recovery=new RecoveryService(repo),preview=await recovery.preview(c.accountId,x.role.id,at);await recovery.cancel(c.accountId,x.role.id,{reason:'Synthetic equipment failure',expectedPenaltyPaise:preview.penaltyPaise},at);
+   const next=await dispatch.dispatch(x.role.id,at),replacement=await db.getRepository(CreatorEntity).findOneByOrFail({id:next[0]!.creatorId});await dispatch.accept(replacement.accountId,next[0]!.id,at);
+   await expect(svc.accept(customer,x.session.id,{reviewIds},at)).rejects.toMatchObject({code:'PREFERENCES_CHANGED'});
+   const fresh=await svc.detail(customer,x.session.id);expect(fresh.canCancelFree).toBe(true);expect(fresh.roles[0].reviewId).not.toBe(reviewIds[0]);
+   const event={action:'trip',clientId:randomUUID(),deviceAt:at.toISOString(),location:{...x.session.input.venue,accuracy:5}},sessions=new SessionService(repo,true);
+   await expect(sessions.transition(replacement.accountId,x.role.id,event,at)).rejects.toMatchObject({code:'PREFERENCE_REVIEW_REQUIRED'});
+   await svc.accept(customer,x.session.id,{reviewIds:fresh.roles.map((r:{reviewId:string})=>r.reviewId)},at);const old={...event,deviceAt:new Date(at.getTime()-60000).toISOString()};await expect(sessions.transition(replacement.accountId,x.role.id,old,at)).rejects.toMatchObject({code:'PREFERENCE_DECISION_TIME'});await expect(sessions.transition(replacement.accountId,x.role.id,event,at)).resolves.toMatchObject({status:'en_route'});
+ });
+ test('matching profile is optional, private and preference notifications are bilingual',async()=>{
+   const c=await repo.creator(creatorAccount),svc=new PreferenceService(repo);
+   expect((await request(app).put('/api/creator/matching-profile').auth('demo:customer',{type:'bearer'}).send({languages:['ta'],gender:'female'})).status).toBe(404);
+   expect((await request(app).put('/api/creator/matching-profile').auth('demo:creator',{type:'bearer'}).send({languages:[],gender:null})).status).toBe(422);
+   try{
+    const response=await request(app).put('/api/creator/matching-profile').auth('demo:creator',{type:'bearer'}).send({languages:['ta','hi'],gender:null});expect(response.status).toBe(200);expect(response.body.data.gender).toBeNull();
+    expect((await svc.profile(creatorAccount)).languages).toEqual(['ta','hi']);
+    const x=await paid(177);await db.getRepository(SessionEntity).update(x.session.id,{input:{...x.session.input,preferences:{femaleCreator:true}}});const offers=await dispatch.dispatch(x.role.id),creator=await db.getRepository(CreatorEntity).findOneByOrFail({id:offers[0]!.creatorId});await dispatch.accept(creator.accountId,offers[0]!.id);
+    const [account]=await db.query('SELECT language FROM accounts WHERE id=$1',[customer]);await db.query("UPDATE accounts SET language='ta' WHERE id=$1",[customer]);
+    try{for(let i=0;i<20&&await drainDemoOutbox(repo);i++);const notices=await db.query("SELECT n.title,n.body FROM notifications n JOIN outbox o ON o.id=n.event_id WHERE o.kind='preferences_unmet' AND o.entity_id=$1 AND n.account_id=$2",[x.session.id,customer]);expect(notices).toHaveLength(1);expect(notices[0].title).toBe('படைப்பாளர் விருப்பங்களைப் பரிசீலிக்கவும்');expect(notices[0].body).toContain('கட்டணமின்றி');}finally{await db.query('UPDATE accounts SET language=$2 WHERE id=$1',[customer,account.language]);}
+   }finally{await svc.updateProfile(creatorAccount,{languages:c.languages,gender:null});}
  });
 
 });

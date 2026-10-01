@@ -1,6 +1,7 @@
 import {rateLimit} from 'express-rate-limit';
 import {AuthenticationService} from '../services/authentication';
 import {pipeline} from 'node:stream/promises';
+import {PreferenceService} from '../services/preferences';
 import {CreatorProfileService} from '../services/creator-profile';
 import {SessionTimingService} from '../services/session-timing';
 import {RatingService} from '../services/ratings';
@@ -27,7 +28,7 @@ import type {Env} from '../config/env';
 import {categories,earliestServiceStart} from '@kamraw/domain';
 export function routes(repo:PlatformRepository,env:Env){
   const records=new PaymentRecordsService(repo,env.APP_MODE==='demo'),profiles=new CreatorProfileService(repo,env.APP_MODE==='demo'),ratings=new RatingService(repo),timing=new SessionTimingService(repo);
-  const router=Router(),booking=new BookingService(repo),changes=new SessionChangeService(repo),recovery=new RecoveryService(repo),prints=new PrintService(repo,env.APP_MODE==='demo'),privacy=new PrivacyService(repo,env.APP_MODE==='demo'),dispatch=new DispatchService(repo),session=new SessionService(repo,env.APP_MODE==='demo'),media=new MediaService(repo,env.MEDIA_ROOT,env.APP_MODE==='demo'),ops=new OperationsService(repo,env.APP_MODE==='demo'),account=new AccountService(repo),query=new QueryService(repo);
+  const router=Router(),preferences=new PreferenceService(repo),booking=new BookingService(repo),changes=new SessionChangeService(repo),recovery=new RecoveryService(repo),prints=new PrintService(repo,env.APP_MODE==='demo'),privacy=new PrivacyService(repo,env.APP_MODE==='demo'),dispatch=new DispatchService(repo),session=new SessionService(repo,env.APP_MODE==='demo'),media=new MediaService(repo,env.MEDIA_ROOT,env.APP_MODE==='demo'),ops=new OperationsService(repo,env.APP_MODE==='demo'),account=new AccountService(repo),query=new QueryService(repo);
   const auth=new AuthenticationService(repo,env.APP_MODE==='demo');
   router.use('/auth',rateLimit({windowMs:15*60000,limit:100,standardHeaders:'draft-8',legacyHeaders:false}),(_req,res,next)=>{res.setHeader('Cache-Control','no-store');next();});
   router.post('/auth/demo',respond(req=>auth.demoLogin(req.body)));
@@ -48,6 +49,10 @@ export function routes(repo:PlatformRepository,env:Env){
   router.post('/quotes',respond(req=>booking.quote(uid(req),req.body),201));router.post('/checkout',respond(req=>{const b=z.object({quoteId:z.uuid(),useCredits:z.boolean().default(false),expectedCreditPaise:z.number().int().nonnegative().optional()}).parse(req.body);return booking.checkout(uid(req),b.quoteId,new Date(),b.useCredits,b.expectedCreditPaise);},201));
   router.post('/orders/:id/demo-pay',respond(async req=>{if(env.APP_MODE!=='demo')throw new AppError(404,'NOT_FOUND','Not found');const result=await booking.demoPay(uid(req),id(req));const roles=await repo.db.query('SELECT r.id FROM roles r JOIN sessions s ON s.id=r.session_id WHERE s.order_id=$1',[id(req)]) as {id:string}[];for(const r of roles)await dispatch.dispatch(r.id);return result;}));
   router.get('/orders',respond(req=>query.bookings(uid(req),page(req))));router.get('/orders/:id',respond(req=>repo.orderDetail(id(req),uid(req))));
+  router.get('/sessions/:id/preferences',respond(req=>preferences.detail(uid(req),id(req))));
+  router.post('/sessions/:id/preferences/accept',respond(req=>preferences.accept(uid(req),id(req),req.body)));
+  router.get('/creator/matching-profile',respond(req=>preferences.profile(uid(req))));
+  router.put('/creator/matching-profile',respond(req=>preferences.updateProfile(uid(req),req.body)));
   router.get('/sessions/:id/recovery',respond(req=>recovery.failures(uid(req),id(req))));router.post('/sessions/:id/replacement',respond(req=>recovery.chooseReplacement(uid(req),id(req))));
   router.get('/creator/cancellations',respond(req=>recovery.creatorHistory(uid(req))));router.get('/creator/roles/:id/cancellation',respond(req=>recovery.preview(uid(req),id(req))));router.post('/creator/roles/:id/cancel',respond(req=>recovery.cancel(uid(req),id(req),req.body)));
   router.get('/sessions/:id/changes',respond(req=>changes.list(uid(req),id(req))));

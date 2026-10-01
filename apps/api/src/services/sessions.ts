@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {pendingPreferences} from './preferences';
 import {SessionTimingService} from './session-timing';
 import {refreshSessionState} from './session-state';
 import {assertTransition,distanceMetres,pointSchema,type Status} from '@kamraw/domain';
@@ -18,6 +19,8 @@ export class SessionService {
       const [last]=await m.query("SELECT max(device_at) AS at FROM session_events WHERE actor_id=$1 AND session_id=$2 AND payload->>'roleId'=$3",[accountId,session.id,roleId]);if(last.at&&when<new Date(last.at))throw new AppError(422,'EVENT_ORDER','Event time is before the previous step');
       const timing=new SessionTimingService(this.repo);
       const next=stateByAction[e.action]!;try{assertTransition(role.status,next);}catch(err){throw new AppError(409,'INVALID_TRANSITION',(err as Error).message);}
+      if(e.action==='trip'&&await pendingPreferences(m,session.id))throw new AppError(409,'PREFERENCE_REVIEW_REQUIRED','Wait for the customer to review the unmatched preferences before starting the trip.');
+      if(e.action==='trip'){const [decision]=await m.query(`SELECT max(p.accepted_at) AS at FROM preference_reviews p JOIN roles r ON r.id=p.role_id WHERE r.session_id=$1 AND r.creator_id=p.creator_id AND r.status NOT IN ('cancelled','refunded')`,[session.id]);if(decision.at&&when<new Date(decision.at))throw new AppError(409,'PREFERENCE_DECISION_TIME','Start the trip after the customer has reviewed the unmatched preferences.');}
       if(e.action==='check_in'){
         const distance=distanceMetres(e.location,session.input.venue);if(distance+e.location.accuracy>200)throw new AppError(422,'OUTSIDE_GEOFENCE',`Move closer to the venue (${Math.round(distance)} metres away)`);
         if(!this.demo)throw new AppError(503,'IDENTITY_PROVIDER_REQUIRED','Live face verification is not configured');

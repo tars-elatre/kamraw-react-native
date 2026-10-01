@@ -13,6 +13,7 @@ export class PrivacyService {
    const queries:Record<string,string>={
     orders:'SELECT id,code,category,status,total_paise,credit_paise,currency,created_at FROM orders WHERE customer_id=$1',
     sessions:'SELECT s.id,s.input,s.status,s.start_at,s.end_at FROM sessions s JOIN orders o ON o.id=s.order_id WHERE o.customer_id=$1',
+    preferenceReviews:'SELECT p.id,p.role_id,p.unmet,p.accepted_at,p.created_at FROM preference_reviews p JOIN roles r ON r.id=p.role_id JOIN sessions s ON s.id=r.session_id JOIN orders o ON o.id=s.order_id WHERE o.customer_id=$1',
     creator:'SELECT name,status,disciplines,languages,profile,checks,metrics FROM creators WHERE account_id=$1',
     tickets:'SELECT id,order_id,subject,body,category,status,created_at FROM tickets WHERE account_id=$1',
     supportMessages:'SELECT m.ticket_id,m.body,m.created_at FROM ticket_messages m JOIN tickets t ON t.id=m.ticket_id WHERE m.actor_id=$1 OR (t.account_id=$1 AND NOT m.internal)',

@@ -21,3 +21,10 @@ test('double entry rejects imbalanced or fractional money',()=>{expect(()=>asser
 test('earliest service slot respects India opening hours across midnight and zone overrides',()=>{expect(earliestServiceStart(new Date('2026-09-30T14:45:00Z')).toISOString()).toBe('2026-09-30T22:30:00.000Z');expect(earliestServiceStart(new Date('2026-09-30T12:00:00Z'),180,8,20).toISOString()).toBe('2026-10-01T02:30:00.000Z');expect(earliestServiceStart(now).toISOString()).toBe(earliestStart(now).toISOString());});
 
 test('money display preserves paise instead of rounding payment totals',()=>expect(formatMoney(123456)).toBe('₹1,234.56'));
+test('preferences rank eligible creators first without relaxing availability or tier',()=>{
+ const base:Candidate={id:'fallback',active:true,online:true,zoneIds:['chennai'],disciplines:{photo:'T1'},rating:5,reliability:1,qc:1,recentJobs:0,acceptance:1,etaMinutes:10,nextProximity:1,blocked:false,available:true,languages:['en']};
+ const partial={...base,id:'partial',languages:['hi']},full={...base,id:'full',languages:['hi'],gender:'female',etaMinutes:70};
+ const result=eligibleCandidates([base,partial,full,{...full,id:'blocked',blocked:true},{...full,id:'wrong-tier',disciplines:{photo:'T2' as const}},{...full,id:'offline',online:false}],{discipline:'photo',tier:'T1'},'on_demand','chennai',{femaleCreator:true,language:'hi'});
+ expect(result.map(c=>c.id)).toEqual(['full','partial','fallback']);
+ expect(eligibleCandidates([base,full],{discipline:'photo',tier:'T1'},'scheduled','chennai').map(c=>c.id)).toEqual(['fallback','full']);
+});

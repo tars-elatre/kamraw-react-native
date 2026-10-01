@@ -5,7 +5,7 @@ Source: supplied Kamraw_PRD_v1.0.pdf, 57 pages. User authorized full implementat
 ## Verified through 1 October 2026
 
 - Target repository: tars-elatre/kamraw-react-native. Connector writes returned 403; user authorized local CLI login. Repository operations explicitly use the authenticated tars-elatre CLI identity with push permission without changing another active local account.
-- TypeScript, ESLint, domain tests (21), PostgreSQL integration tests (39), mobile component/offline/transport tests (17), API/web builds and Expo Android/iOS/web exports passed.
+- TypeScript, ESLint, domain tests (22), PostgreSQL integration tests (42), mobile component/offline/transport tests (20), API/web builds and Expo Android/iOS/web exports passed.
 - Docker image built and ran successfully against local PostgreSQL. `/ready` and packaged web returned HTTP 200. The read-only wallet/export verification container also served `/app` and the authenticated credits API successfully on 1 October.
 - Customer browser test completed sign-in, scheduling, quote review and simulated checkout, creating local demo booking KMR-10001. Phone-size layout inspected at 390 × 844.
 - Dependency security patches applied; npm audit reported zero vulnerabilities after installation.
@@ -42,3 +42,12 @@ Commit `a115b9d8d994ae8f5bda4b1f6b1680ed341579e5` passed [verification 368244841
 Android `assembleRelease` succeeded, including native lint, for ARM64. The initial 512 MiB Metaspace build exhausted memory; the documented 2 GiB Metaspace retry passed. APK signature verification passed with the generated Android debug certificate. Package `app.kamraw.customer`, version 1.0.0, minimum SDK 24 and target SDK 36 were inspected. The bundled API URL is `https://demo.kamraw.com`; no localhost API URL was found. The internal test artifact is `artifacts/Kamraw-demo-android-arm64.apk` (31,754,518 bytes), SHA-256 `8d031ffe7e1830e0a60c58a1d1204f98c2a1b6facef2d0ddd87064565c8708d6`. Generated native projects and artifacts remain outside Git.
 
 Android Studio's welcome-window controls did not respond through the available UI automation and no emulator launched, so native interaction testing is explicitly unverified. Full Xcode and release-signing accounts remain unavailable. The APK is an internal demo test build, not a store-ready production release.
+
+
+## Creator preferences
+
+BR-19 matching now prioritizes eligible creators who meet the requested language and optional female-creator preference. Availability, tier, zone and customer blocks remain mandatory. On-demand batches offer the best available preference match first, with fallback after those offers end. Creators can manage their declared languages and optional gender in the app; assignment decisions retain the matching result at acceptance. Public creator cards do not expose the gender field.
+
+Unmet preferences create a customer review and English/Tamil notification. All crew members must wait for the current reviews before starting travel. Customers can explicitly accept the disclosed assignment or cancel the session without a fee. Reassignment invalidates prior consent; stale review identifiers and backdated trip events are rejected. Decisions and refunds are idempotent, and preference decisions are included in customer privacy exports. Existing active assignments are backfilled by a forward migration.
+
+84 tests passed (domain 22, API/PostgreSQL 42, mobile 20), as did type checking, lint, API/web builds and all-platform Expo exports. Local browser QA created KMR-10004 with Hindi and female-creator preferences, accepted its offer from the creator app, verified the disabled trip button, previewed a full fee-free refund, and accepted the disclosed assignment in the customer app. Release verification is pending.
