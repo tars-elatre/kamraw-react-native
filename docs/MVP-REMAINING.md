@@ -4,6 +4,8 @@ This is a working gap list against the supplied PRD, not a claim of complete cov
 
 ## Implementable product gaps
 
+- Finish preference-review timing interactions: customer decision delays must not automatically count as creator no-shows. Refresh cancelled booking/creator views consistently; browser verification exposed stale creator cards after cancellation.
+
 - Complete English/Tamil UI copy beyond the current translated labels, help articles and notification templates.
 - Self-service tier/date alternatives during a dispatch delay. Waiting/full refund is implemented; other changes currently direct customers to support.
 - Media gallery selection downloads, video player/streaming, richer album layouts and print-defect photo attachments. Owner ZIP downloads, individual files, share APIs and basic album proof/fulfilment flows are implemented.
