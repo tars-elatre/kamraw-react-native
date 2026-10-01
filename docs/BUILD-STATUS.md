@@ -2,14 +2,14 @@
 
 Source: supplied Kamraw_PRD_v1.0.pdf, 57 pages. User authorized full implementation, tests, AWS deployment and GitHub push, and explicitly requested demo credentials for external services.
 
-## Verified as of 30 September 2026
+## Verified through 1 October 2026
 
 - Target repository: tars-elatre/kamraw-react-native. Connector writes returned 403; user authorized local CLI login. CLI now authenticates as tars-elatre with repository push permission.
-- TypeScript, ESLint, domain tests (19), PostgreSQL integration tests (13), mobile component/offline/transport tests (8), API/web builds and Expo Android/iOS/web exports passed.
+- TypeScript, ESLint, domain tests (19), PostgreSQL integration tests (16), mobile component/offline/transport tests (8), API/web builds and Expo Android/iOS/web exports passed.
 - Docker image built and ran successfully against local PostgreSQL. `/ready` and packaged web returned HTTP 200. The first reduced runtime image was approximately 94 MB; subsequent web packaging changes are being validated.
 - Customer browser test completed sign-in, scheduling, quote review and simulated checkout, creating local demo booking KMR-10001. Phone-size layout inspected at 390 × 844.
 - Dependency security patches applied; npm audit reported zero vulnerabilities after installation.
-- CloudFormation lint and Guard rules passed. AWS initial deployment rolled back when the Free Plan rejected seven-day backups. Retained ECR, S3 and application secret resources were imported back into the stack. Revised infrastructure deployment with one-day backups reached UPDATE_COMPLETE. Public HTTPS `/health`, `/ready` and `/app` returned 200. Customer sign-in and simulated checkout created KMR-10001 on the deployed database. Verify Kamraw run 36753032192 and deployment run 36753583930 passed for commit 4165947.
+- CloudFormation lint and Guard rules passed. AWS initial deployment rolled back when the Free Plan rejected seven-day backups. Retained ECR, S3 and application secret resources were imported back into the stack. Revised infrastructure deployment with one-day backups reached UPDATE_COMPLETE. Public HTTPS `/health`, `/ready` and `/app` returned 200. Customer sign-in and simulated checkout created KMR-10001 on the deployed database. Verify Kamraw run 36753032192 and deployment run 36753583930 passed for commit 4165947. Subsequent verification 36807883172 and deployment 36808235280 passed for commit 272c42f, including communication screens and mobile uploader. Public reschedule of KMR-10001 from 10 to 11 October succeeded with no extra charge.
 
 ## Implemented flows
 
@@ -17,9 +17,9 @@ Customer event/discipline/tier selection, multiple sessions, geofenced quotes, 1
 
 ## Remaining implementation and launch verification
 
-- Complete creator cancellation/replacement and richer manual dispatch controls.
+- Creator cancellation/replacement, no-show detection, reviewed penalties, customer credits, cancellation compensation and controlled manual offers are implemented. Continue UI verification of these workflows.
 - Verify native device uploads beyond the successful bundle and binary transport checks. Resumable mobile uploads, message, last-location tracking, availability, rating, support-reply and share-management screens are implemented. Verified image inspection, automatic dimensions and watermarked previews are implemented.
-- Finish print proof/order fulfilment simulation and retention/privacy fulfilment workflows. Private in-app notifications with read status and idempotent event delivery are implemented.
+- Finish print proof/order fulfilment simulation and retention/privacy fulfilment workflows. Private in-app notifications with read status and idempotent event delivery are implemented. Demo credits are recorded; spending credits during checkout remains to be implemented.
 - Finish Tamil copy coverage, accessibility and responsive checks beyond the completed customer booking flow.
 - Continue public verification of the remaining workflows as each release is deployed.
 - Native device testing and signed store builds require platform build tooling/accounts; full Xcode is unavailable on this computer.

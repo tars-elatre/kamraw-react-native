@@ -53,19 +53,21 @@ export class BookingService {
   async cancelPreview(customerId:string,sessionId:string,now=new Date()){
     const {session,order}=await this.repo.authorizedSession(sessionId,customerId);if(order.customerId!==customerId)throw new AppError(403,'FORBIDDEN','Only the customer can cancel this session');
     if(!['confirmed','assigned','reconfirmed','en_route','arrived'].includes(session.status))throw new AppError(409,'CANNOT_CANCEL','This session can no longer be cancelled; please contact support');
-    const {rates}=await this.repo.config();return {...cancellation(session.totalPaise,session.startAt,now,session.status,rates.cancellationBps),sessionId};
+    const {rates}=await this.repo.config();const [failure]=await this.repo.db.query("SELECT max(credit_paise)::int AS credit FROM service_failures WHERE session_id=$1 AND status='pending'",[sessionId]);const fault=failure?.credit!==null;return {...cancellation(session.totalPaise,session.startAt,now,session.status,rates.cancellationBps,fault),creditPaise:failure?.credit??0,platformFault:fault,sessionId};
   }
   async cancel(customerId:string,sessionId:string,expectedFee:number,now=new Date()){
     return this.repo.db.transaction(async m=>{
       const session=requireValue(await m.getRepository(SessionEntity).findOne({where:{id:sessionId},lock:{mode:'pessimistic_write'}}));await this.repo.ownedOrder(session.orderId,customerId,m);
       const existing=await m.query('SELECT * FROM refunds WHERE session_id=$1',[sessionId]);if(existing.length)return existing[0];
       if(!['confirmed','assigned','reconfirmed','en_route','arrived'].includes(session.status))throw new AppError(409,'CANNOT_CANCEL','This session cannot be cancelled');
-      const {rates}=await this.repo.config(m);const fee=cancellation(session.totalPaise,session.startAt,now,session.status,rates.cancellationBps);
+      const {rates}=await this.repo.config(m);const [failure]=await m.query("SELECT max(credit_paise)::int AS credit FROM service_failures WHERE session_id=$1 AND status='pending'",[sessionId]);const fee=cancellation(session.totalPaise,session.startAt,now,session.status,rates.cancellationBps,failure?.credit!==null);
       if(fee.feePaise!==expectedFee)throw new AppError(409,'FEE_CHANGED','The cancellation fee changed. Review the new amount before confirming.');
+      const assigned=(await m.getRepository(RoleEntity).findBy({sessionId})).filter(r=>r.creatorId&&!['cancelled','refunded'].includes(r.status));if(fee.feePaise>0&&assigned.length){const earningTotal=assigned.reduce((sum,r)=>sum+r.earningPaise,0);let allocated=0;for(const [index,r] of assigned.entries()){const pool=Math.round(fee.feePaise*.5);const amount=session.status==='arrived'?r.earningPaise:index===assigned.length-1?pool-allocated:Math.floor(pool*(earningTotal?r.earningPaise/earningTotal:1/assigned.length));allocated+=amount;if(amount>0)await m.query('INSERT INTO creator_compensation(role_id,creator_id,amount_paise,reason) VALUES($1,$2,$3,$4)',[r.id,r.creatorId,amount,'Customer cancellation compensation']);}}
       await m.getRepository(SessionEntity).update(sessionId,{status:'cancelled'});await m.getRepository(RoleEntity).update({sessionId},{status:'cancelled'});await m.query("UPDATE offers SET status='withdrawn' WHERE role_id IN(SELECT id FROM roles WHERE session_id=$1) AND status='pending'",[sessionId]);
       const [refund]=await m.query('INSERT INTO refunds(session_id,amount_paise,fee_paise,method) VALUES($1,$2,$3,$4) RETURNING *',[sessionId,fee.refundPaise,fee.feePaise,'source']);
       await this.repo.ledger(m,`cancellation:${sessionId}`,session.orderId,[{account:'customer_deposits',amountPaise:session.totalPaise},{account:'refund_payable',amountPaise:-fee.refundPaise},{account:'cancellation_revenue',amountPaise:-fee.feePaise}]);
       await m.query("UPDATE orders SET status='cancelled' WHERE id=$1 AND NOT EXISTS(SELECT 1 FROM sessions WHERE order_id=$1 AND status<>'cancelled')",[session.orderId]);
+      if(failure?.credit>0){await m.query('INSERT INTO customer_credits(customer_id,session_id,reference,amount_paise) VALUES($1,$2,$3,$4)',[customerId,sessionId,`no-show:${sessionId}`,failure.credit]);await this.repo.ledger(m,`no-show-credit:${sessionId}`,session.orderId,[{account:'service_recovery_cost',amountPaise:failure.credit},{account:'customer_credit_liability',amountPaise:-failure.credit}]);}await m.query("UPDATE service_failures SET status='refunded' WHERE session_id=$1 AND status='pending'",[sessionId]);
       await this.repo.audit(m,customerId,'session_cancelled',sessionId,fee);await this.repo.event(m,'refund_requested',refund.id,{amountPaise:fee.refundPaise});return refund;
     });
   }

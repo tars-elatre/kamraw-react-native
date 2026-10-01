@@ -8,7 +8,10 @@ ID=$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name AWS-RunS
 for attempt in $(seq 1 90); do
   STATUS=$(aws ssm get-command-invocation --command-id "$ID" --instance-id "$INSTANCE_ID" --query Status --output text 2>/dev/null || true)
   case "$STATUS" in
-    Success) curl --fail --retry 12 --retry-delay 5 --retry-all-errors "$PUBLIC_URL/ready"; exit 0 ;;
+    Success)
+      curl --fail --retry 12 --retry-delay 5 --retry-all-errors "$PUBLIC_URL/ready"
+      curl --fail --silent "$PUBLIC_URL/health" | jq -e --arg release "$GITHUB_SHA" '.status == "ok" and .release == $release'
+      exit 0 ;;
     Failed|Cancelled|TimedOut) echo "Deployment failed: $STATUS" >&2; exit 1 ;;
   esac
   sleep 10

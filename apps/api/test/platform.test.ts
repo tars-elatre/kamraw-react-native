@@ -10,6 +10,7 @@ import {createApp} from '../src/app';
 import {createDataSource} from '../src/db/data-source';
 import {seedDemo} from '../src/db/seed';
 import {PlatformRepository} from '../src/repositories/platform';
+import {RecoveryService} from '../src/services/recovery';
 import {SessionChangeService} from '../src/services/session-changes';
 import {BookingService} from '../src/services/bookings';
 import {DispatchService} from '../src/services/dispatch';
@@ -75,6 +76,24 @@ suite('PostgreSQL platform integration',()=>{
    expect((await request(app).post(`/api/notifications/${n.id}/read`).auth('demo:creator',{type:'bearer'}).send({})).status).toBe(404);expect((await request(app).post(`/api/notifications/${n.id}/read`).auth('demo:customer',{type:'bearer'}).send({})).status).toBe(200);
    const ticket=await request(app).post('/api/tickets').auth('demo:customer',{type:'bearer'}).send({category:'booking',subject:'Question about my shoot',body:'Please confirm the preparation checklist.'});const ticketId=ticket.body.data.id;
    expect((await request(app).get(`/api/tickets/${ticketId}/messages`).auth('demo:creator',{type:'bearer'})).status).toBe(404);expect((await request(app).post(`/api/ops/tickets/${ticketId}/messages`).auth('demo:ops',{type:'bearer'}).send({body:'Your preparation checklist is in the shoot brief.'})).status).toBe(200);const replies=await request(app).get(`/api/tickets/${ticketId}/messages`).auth('demo:customer',{type:'bearer'});expect(replies.body.data).toHaveLength(1);
+ });
+ test('creator no-show releases the role, refunds without fee, issues one credit and nets penalties from payout',async()=>{
+   const x=await paid(45),svc=new RecoveryService(repo),offers=await dispatch.dispatch(x.role.id),c=await db.getRepository(CreatorEntity).findOneByOrFail({id:offers[0]!.creatorId});await dispatch.accept(c.accountId,offers[0]!.id);const now=new Date(x.session.startAt.getTime()-3600000),preview=await svc.preview(c.accountId,x.role.id,now);expect(preview.noShow).toBe(true);
+   await expect(svc.cancel(c.accountId,x.role.id,{reason:'Equipment failure',expectedPenaltyPaise:preview.penaltyPaise+1},now)).rejects.toMatchObject({code:'PENALTY_CHANGED'});
+   await Promise.all([svc.cancel(c.accountId,x.role.id,{reason:'Equipment failure',expectedPenaltyPaise:preview.penaltyPaise},now),svc.cancel(c.accountId,x.role.id,{reason:'Equipment failure',expectedPenaltyPaise:preview.penaltyPaise},now)]);
+   expect((await db.getRepository(RoleEntity).findOneByOrFail({id:x.role.id})).creatorId).toBeNull();const replacements=await dispatch.dispatch(x.role.id,now);expect(replacements.length).toBeGreaterThan(0);expect(replacements.some(o=>o.creatorId===c.id)).toBe(false);
+   const refund=await booking.cancelPreview(customer,x.session.id,now);expect(refund.feePaise).toBe(0);expect(refund.creditPaise).toBe(Math.round(x.session.totalPaise*.2));await booking.cancel(customer,x.session.id,0,now);await booking.cancel(customer,x.session.id,0,now);const [credits]=await db.query('SELECT count(*)::int AS n FROM customer_credits WHERE session_id=$1',[x.session.id]);expect(credits.n).toBe(1);
+   const earned=await paid(46);await db.getRepository(RoleEntity).update(earned.role.id,{creatorId:c.id,status:'media_verified'});const run=await ops.generatePayout(opsId);expect(run.total_paise).toBe(earned.role.earningPaise-preview.penaltyPaise);await ops.approvePayout(approver,run.id);await drainDemoOutbox(repo);await drainDemoOutbox(repo);const [balance]=await db.query("SELECT sum(amount_paise)::int AS total FROM ledger_entries WHERE account='creator_penalty_receivable'");expect(balance.total).toBe(0);
+ });
+ test('manual dispatch enforces qualification and still requires creator acceptance',async()=>{
+   const x=await paid(50),candidates=await dispatch.manualCandidates(x.role.id);expect(candidates.length).toBeGreaterThan(1);
+   expect((await request(app).get('/api/ops/dispatch').auth('demo:customer',{type:'bearer'})).status).toBe(403);
+   const first=await dispatch.manualOffer(opsId,x.role.id,{creatorId:candidates[0]!.id,reason:'Manual coverage review'});const second=await dispatch.manualOffer(opsId,x.role.id,{creatorId:candidates[1]!.id,reason:'Choose available backup'});const c1=await db.getRepository(CreatorEntity).findOneByOrFail({id:first.creatorId}),c2=await db.getRepository(CreatorEntity).findOneByOrFail({id:second.creatorId});
+   await expect(dispatch.accept(c1.accountId,first.id)).rejects.toMatchObject({code:'OFFER_UNAVAILABLE'});expect((await db.getRepository(RoleEntity).findOneByOrFail({id:x.role.id})).creatorId).toBeNull();await dispatch.accept(c2.accountId,second.id);expect((await db.getRepository(RoleEntity).findOneByOrFail({id:x.role.id})).creatorId).toBe(c2.id);
+ });
+ test('customer cancellation shares the fee with the assigned creator and pays it only once',async()=>{
+   const x=await paid(55),offers=await dispatch.dispatch(x.role.id),c=await db.getRepository(CreatorEntity).findOneByOrFail({id:offers[0]!.creatorId});await dispatch.accept(c.accountId,offers[0]!.id);const now=new Date(x.session.startAt.getTime()-8*3600000),preview=await booking.cancelPreview(customer,x.session.id,now);expect(preview.feeBps).toBe(5000);await booking.cancel(customer,x.session.id,preview.feePaise,now);
+   const [compensation]=await db.query('SELECT amount_paise FROM creator_compensation WHERE role_id=$1',[x.role.id]);expect(compensation.amount_paise).toBe(Math.round(preview.feePaise*.5));const run=await ops.generatePayout(opsId);expect(run.total_paise).toBe(compensation.amount_paise);await expect(ops.generatePayout(opsId)).rejects.toMatchObject({code:'NO_EARNINGS'});
  });
  test('database rejects modification of audit and unbalanced ledger',async()=>{await expect(db.query('UPDATE audit SET action=$1',['changed'])).rejects.toThrow('Append-only');await expect(db.transaction(async m=>{const [t]=await m.query('INSERT INTO ledger_transactions(reference) VALUES($1) RETURNING id',[randomUUID()]);await m.query('INSERT INTO ledger_entries(transaction_id,account,amount_paise) VALUES($1,$2,$3)',[t.id,'cash',100]);})).rejects.toThrow('not balanced');});
 });

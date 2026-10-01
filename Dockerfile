@@ -17,6 +17,9 @@ FROM build AS production-deps
 RUN rm -rf node_modules && npm ci --omit=dev --ignore-scripts --workspace=@kamraw/api --workspace=@kamraw/domain --include-workspace-root=false
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
+ARG RELEASE_SHA=local
+ENV APP_RELEASE=$RELEASE_SHA
+LABEL org.opencontainers.image.revision=$RELEASE_SHA
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && curl --fail --silent --show-error https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem -o /usr/local/share/ca-certificates/rds-bundle.pem && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production PORT=4000 MEDIA_ROOT=/data/media WEB_ROOT=/app/web MOBILE_WEB_ROOT=/app/mobile-web NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/rds-bundle.pem
 COPY --from=production-deps /app/node_modules ./node_modules
