@@ -13,8 +13,14 @@ COPY apps/mobile apps/mobile
 ARG PUBLIC_URL=https://demo.kamraw.com
 ENV VITE_API_URL=$PUBLIC_URL VITE_APP_MODE=demo EXPO_PUBLIC_API_URL=$PUBLIC_URL EXPO_PUBLIC_WEB_URL=$PUBLIC_URL EXPO_PUBLIC_APP_MODE=demo
 RUN npm run build && cd apps/mobile && npx expo export --platform web
-FROM build AS production-deps
-RUN rm -rf node_modules && npm ci --omit=dev --ignore-scripts --workspace=@kamraw/api --workspace=@kamraw/domain --include-workspace-root=false
+FROM node:22-bookworm-slim AS production-deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY packages/domain/package.json packages/domain/package.json
+COPY apps/api/package.json apps/api/package.json
+COPY apps/web/package.json apps/web/package.json
+COPY apps/mobile/package.json apps/mobile/package.json
+RUN npm ci --omit=dev --ignore-scripts --workspace=@kamraw/api --workspace=@kamraw/domain --include-workspace-root=false
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 ARG RELEASE_SHA=local

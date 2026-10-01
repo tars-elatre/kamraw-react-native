@@ -52,8 +52,8 @@ jobs:
           build-args: |
             PUBLIC_URL=${{ env.PUBLIC_URL }}
             RELEASE_SHA=${{ env.RELEASE_SHA }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=deploy-arm64
+          cache-to: type=gha,scope=deploy-arm64,mode=max
       - name: Migrate, deploy and verify HTTPS
         env:
           GITHUB_SHA: ${{ env.RELEASE_SHA }}
