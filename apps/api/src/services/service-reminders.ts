@@ -6,7 +6,7 @@ export class ServiceReminders {
   async tick(now=new Date()){
     return this.repo.db.transaction(async m=>{
       const [lock]=await m.query("SELECT pg_try_advisory_xact_lock(hashtext('kamraw-service-reminders')) AS locked");if(!lock.locked)return;
-      const roles=await m.query(`SELECT r.id,r.session_id,r.status,r.discipline,r.dispatch_started_at,r.assigned_at,s.start_at,s.end_at,s.completed_at,s.input->>'mode' AS mode
+      const roles=await m.query(`SELECT r.id,r.session_id,r.status,r.discipline,r.dispatch_started_at,r.assigned_at,s.start_at,coalesce(r.service_end_at,s.end_at) AS end_at,coalesce(r.actual_completed_at,s.completed_at) AS completed_at,s.input->>'mode' AS mode
         FROM roles r JOIN sessions s ON s.id=r.session_id WHERE r.status IN ('confirmed','assigned','reconfirmed','en_route','in_session','session_completed')
         ORDER BY s.start_at LIMIT 1000`) as DueRole[];
       for(const role of roles){

@@ -10,7 +10,7 @@ export class DispatchService {
       const candidates=await m.getRepository(CreatorEntity).findBy({status:'active'});
       const pool:Candidate[]=[];
       for(const c of candidates.filter(c=>!seen.has(c.id))){
-        const conflicts=await m.query(`SELECT 1 FROM roles WHERE creator_id=$1 AND status NOT IN ('cancelled','refunded') AND tstzrange(reserved_start,reserved_end,'[)') && tstzrange($2,$3,'[)') UNION ALL SELECT 1 FROM availability WHERE creator_id=$1 AND NOT available AND tstzrange(start_at,end_at,'[)') && tstzrange($2,$3,'[)')`,[c.id,role.reservedStart,role.reservedEnd]);
+        const conflicts=await m.query(`SELECT 1 FROM role_occupancy WHERE creator_id=$1 AND status NOT IN ('cancelled','refunded') AND tstzrange(reserved_start,occupied_until,'[)') && tstzrange($2,$3,'[)') UNION ALL SELECT 1 FROM availability WHERE creator_id=$1 AND NOT available AND tstzrange(start_at,end_at,'[)') && tstzrange($2,$3,'[)')`,[c.id,role.reservedStart,role.reservedEnd]);
         const blocked=await m.query('SELECT 1 FROM customer_blocks WHERE customer_id=$1 AND creator_id=$2',[customerId,c.id]);
         pool.push({id:c.id,disciplines:c.disciplines,active:c.status==='active',online:c.online,zoneIds:c.zoneIds,rating:c.metrics.rating??5,reliability:c.metrics.reliability??1,qc:c.metrics.qc??1,recentJobs:c.metrics.recentJobs??0,acceptance:c.metrics.acceptance??1,etaMinutes:c.metrics.etaMinutes??80,nextProximity:c.metrics.nextProximity??0,blocked:blocked.length>0,available:conflicts.length===0});
       }

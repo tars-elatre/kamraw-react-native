@@ -10,6 +10,7 @@ export class CreatorProfileService {
       (SELECT count(DISTINCT r.session_id)::int FROM roles r JOIN sessions s ON s.id=r.session_id WHERE r.creator_id=$1 AND s.completed_at IS NOT NULL AND r.status NOT IN ('cancelled','refunded')) AS completed_jobs,
       (SELECT count(*)::int FROM offers WHERE creator_id=$1 AND status='accepted') AS accepted_offers,
       (SELECT count(*)::int FROM offers WHERE creator_id=$1 AND status IN ('accepted','declined','expired')) AS decided_offers,
+      (SELECT count(*)::int FROM roles WHERE creator_id=$1 AND late AND checked_in_at>now()-interval '90 days') AS late_arrivals_90_days,
       (SELECT count(*)::int FROM creator_cancellations WHERE creator_id=$1 AND created_at>now()-interval '90 days') AS cancellations_90_days,
       (SELECT count(*)::int FROM media_assets a JOIN uploads u ON u.id=a.upload_id WHERE u.creator_id=$1 AND a.kind='edited' AND a.qc_status='approved') AS approved_files,
       (SELECT count(*)::int FROM media_assets a JOIN uploads u ON u.id=a.upload_id WHERE u.creator_id=$1 AND a.kind='edited' AND a.qc_status IN ('approved','rejected')) AS reviewed_files`,[creatorId]);

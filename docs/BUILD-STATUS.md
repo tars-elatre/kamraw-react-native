@@ -5,7 +5,7 @@ Source: supplied Kamraw_PRD_v1.0.pdf, 57 pages. User authorized full implementat
 ## Verified through 1 October 2026
 
 - Target repository: tars-elatre/kamraw-react-native. Connector writes returned 403; user authorized local CLI login. CLI now authenticates as tars-elatre with repository push permission.
-- TypeScript, ESLint, domain tests (21), PostgreSQL integration tests (29), mobile component/offline/transport tests (10), API/web builds and Expo Android/iOS/web exports passed.
+- TypeScript, ESLint, domain tests (21), PostgreSQL integration tests (35), mobile component/offline/transport tests (12), API/web builds and Expo Android/iOS/web exports passed.
 - Docker image built and ran successfully against local PostgreSQL. `/ready` and packaged web returned HTTP 200. The read-only wallet/export verification container also served `/app` and the authenticated credits API successfully on 1 October.
 - Customer browser test completed sign-in, scheduling, quote review and simulated checkout, creating local demo booking KMR-10001. Phone-size layout inspected at 390 × 844.
 - Dependency security patches applied; npm audit reported zero vulnerabilities after installation.
@@ -24,3 +24,7 @@ Customer event/discipline/tier selection, multiple sessions, geofenced quotes, 1
 - Continue public verification of the remaining workflows as each release is deployed. Known functional gaps are tracked in [MVP-REMAINING.md](MVP-REMAINING.md). Expanded privacy exports include financial, album and creator records; support forms can link an owned booking.
 - Native device testing and signed store builds require platform build tooling/accounts; full Xcode is unavailable on this computer.
 - Real Auth0 tenant, payment/KYC/messaging/maps/print integrations, commercial rates/tax/legal approvals, monitored operations, multi-zone media backup and restore drills are launch dependencies. Demo mode is intentional and does not substitute for these.
+
+## Session timing verification
+
+Late arrivals over ten minutes receive one 10% demo credit per session and keep the full duration from arrival where the venue allows. Customer venue limits, per-creator timers and end times, recorded late arrivals, and operations-controlled reassignment of affected future bookings are implemented. Customer-unavailable checkout requires the full agreed duration and venue location evidence; it automatically confirms after sixty minutes unless disputed. Customers can confirm or dispute, and operations can resolve or reopen requests. Crew completion still aggregates correctly when another creator has already uploaded. Tests cover duplicate credits, expiry boundaries, disputes, overlapping jobs and privacy. Local browser QA on sample KMR-10003 verified checkout, customer dispute, operations evidence review and completion. Android/iOS/web JavaScript exports passed. This batch is pending release verification.

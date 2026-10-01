@@ -1,4 +1,6 @@
 import {z} from 'zod';
+import {SessionTimingService} from './session-timing';
+import {refreshSessionState} from './session-state';
 import {assertTransition,distanceMetres,pointSchema,type Status} from '@kamraw/domain';
 import {RoleEntity,SessionEntity} from '../entities';
 import {AppError,requireValue} from '../middleware/errors';
@@ -13,20 +15,21 @@ export class SessionService {
       const creator=await this.repo.creator(accountId,m),initial=requireValue(await m.getRepository(RoleEntity).findOneBy({id:roleId,creatorId:creator.id}));await m.getRepository(SessionEntity).findOne({where:{id:initial.sessionId},lock:{mode:'pessimistic_write'}});const role=requireValue(await m.getRepository(RoleEntity).findOne({where:{id:roleId,creatorId:creator.id},lock:{mode:'pessimistic_write'}}));
       const session=requireValue(await m.getRepository(SessionEntity).createQueryBuilder('s').addSelect('s.completionCode').where('s.id=:id',{id:role.sessionId}).setLock('pessimistic_write').getOne());
       const prior=await m.query('SELECT kind,session_id FROM session_events WHERE actor_id=$1 AND client_id=$2',[accountId,e.clientId]) as {kind:string;session_id:string}[];if(prior.length){if(prior[0]!.kind!==e.action||prior[0]!.session_id!==session.id)throw new AppError(409,'EVENT_REUSED','Event identifier has already been used');return {status:role.status,synced:true};}
+      const [last]=await m.query("SELECT max(device_at) AS at FROM session_events WHERE actor_id=$1 AND session_id=$2 AND payload->>'roleId'=$3",[accountId,session.id,roleId]);if(last.at&&when<new Date(last.at))throw new AppError(422,'EVENT_ORDER','Event time is before the previous step');
+      const timing=new SessionTimingService(this.repo);
       const next=stateByAction[e.action]!;try{assertTransition(role.status,next);}catch(err){throw new AppError(409,'INVALID_TRANSITION',(err as Error).message);}
       if(e.action==='check_in'){
         const distance=distanceMetres(e.location,session.input.venue);if(distance+e.location.accuracy>200)throw new AppError(422,'OUTSIDE_GEOFENCE',`Move closer to the venue (${Math.round(distance)} metres away)`);
         if(!this.demo)throw new AppError(503,'IDENTITY_PROVIDER_REQUIRED','Live face verification is not configured');
         if(e.identityProof!=='demo-selfie')throw new AppError(422,'SELFIE_REQUIRED','Complete the demo identity check first');
+        await timing.arrival(m,session,role,when,accountId);
       }
       if(e.action==='start'&&when<session.startAt)throw new AppError(422,'TOO_EARLY','The session cannot start before the booked time');
       if(e.action==='complete'&&e.completionCode!==session.completionCode)throw new AppError(422,'INVALID_CODE','Ask the customer for the correct completion code');
-      await m.getRepository(RoleEntity).update(roleId,{status:next});
-      const roles=(await m.getRepository(RoleEntity).findBy({sessionId:session.id})).filter(r=>!['cancelled','refunded'].includes(r.status));
-      const ladder:Status[]=['confirmed','assigned','reconfirmed','en_route','arrived','in_session','session_completed'];const min=Math.min(...roles.map(r=>ladder.indexOf(r.status)));
-      const aggregate=ladder[min];if(aggregate)await m.getRepository(SessionEntity).update(session.id,{status:aggregate,...(aggregate==='in_session'&&!session.startedAt?{startedAt:when}:{}),...(aggregate==='session_completed'?{completedAt:when}:{})});
+      if(e.action==='complete')await timing.complete(m,role,when,'confirmed',accountId);
+      else{await m.getRepository(RoleEntity).update(roleId,{status:next,...(e.action==='start'?{actualStartedAt:when}:{})});await refreshSessionState(m,session.id,when);}
       await m.query('INSERT INTO session_events(session_id,actor_id,client_id,kind,payload,device_at) VALUES($1,$2,$3,$4,$5,$6)',[session.id,accountId,e.clientId,e.action,JSON.stringify({location:e.location,roleId,identityMethod:e.action==='check_in'?'demo':undefined}),when]);
-      await this.repo.audit(m,accountId,`session_${e.action}`,session.id);await this.repo.event(m,`session_${e.action}`,session.id);return {status:next,synced:true};
+      await this.repo.audit(m,accountId,`session_${e.action}`,session.id);if(e.action!=='complete')await this.repo.event(m,`session_${e.action}`,session.id);return {status:next,synced:true};
     });
   }
   async location(accountId:string,sessionId:string,body:unknown){const p=pointSchema.extend({accuracy:z.number().min(0).max(1000)}).parse(body),c=await this.repo.creator(accountId);const role=await this.repo.db.getRepository(RoleEntity).findOneBy({sessionId,creatorId:c.id,status:'en_route'});if(!role)throw new AppError(409,'TRACKING_INACTIVE','Location is collected only during an active trip');await this.repo.db.query('INSERT INTO locations(session_id,creator_id,lat,lng,accuracy) VALUES($1,$2,$3,$4,$5)',[sessionId,c.id,p.lat,p.lng,p.accuracy]);return {recorded:true};}
