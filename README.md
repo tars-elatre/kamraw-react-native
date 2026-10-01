@@ -52,6 +52,23 @@ cfn-guard validate -d infra/demo.yaml -r infra/security.guard
 
 Integration tests create and remove uniquely named databases, so the test database user needs `CREATEDB`. Without `TEST_DATABASE_URL`, the PostgreSQL integration suite is skipped; CI always supplies it. iOS/Android exports validate bundles, not signed native binaries or device behavior.
 
+### Internal Android test APK
+
+With Android Studio's JDK, Android SDK 36 and NDK 28.2.13676358 installed, set `JAVA_HOME` and `ANDROID_HOME` to those installations, then run from the repository root:
+
+```sh
+export EXPO_PUBLIC_API_URL=https://demo.kamraw.com
+export EXPO_PUBLIC_APP_MODE=demo
+cd apps/mobile
+npx expo prebuild --platform android --no-install --skip-dependency-update react,react-native
+cd android
+./gradlew :app:assembleRelease -PreactNativeArchitectures=arm64-v8a \
+  '-Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=2g' \
+  --no-daemon --max-workers=2 --console=plain
+```
+
+The output is `apps/mobile/android/app/build/outputs/apk/release/app-release.apk`. This ARM64 demo build uses the generated Android debug signing key and is for internal testing only. It includes its JavaScript bundle and connects to the deployed HTTPS demo without Metro. Store distribution requires a controlled release signing key. The build, native lint and APK signature verification passed on 1 October 2026; emulator/device behavior is still unverified.
+
 ## Deployment
 
 `infra/demo.yaml` defines the AWS demo in Mumbai: one ARM application server, encrypted private PostgreSQL, ECR, a private build-artifact bucket, Secrets Manager, CloudWatch and GitHub OIDC. Caddy provides automatic HTTPS on a dedicated Route 53 subdomain. There is no SSH, NAT gateway or load balancer. The API database user is restricted to application tables; migrations run as a separate one-shot task.
