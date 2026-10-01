@@ -6,8 +6,9 @@ import {useSession} from '../services/session';
 import {useAction,useLoad} from '../services/use-load';
 import {savePdf} from '../services/download';
 interface RecordDetail {
+  order:{creditPaise:number};
   payments:{id:string;amount_paise:number;provider:string}[];
-  refunds:{id:string;amount_paise:number;fee_paise:number;status:string}[];
+  refunds:{id:string;amount_paise:number;fee_paise:number;credit_paise:number;status:string}[];
   changes:{id:string;kind:string;delta_paise:number}[];
   prints:{id:string;total_paise:number;status:string}[];
 }
@@ -15,8 +16,9 @@ function Record({id}:{id:string}){
   const load=useLoad<RecordDetail>(`/orders/${id}/payment-record`),{api,demo}=useSession(),a=useAction();
   return <View style={{gap:12}}><ErrorNotice message={load.error??a.error}/>
     {load.data?.payments.map(p=><Text key={p.id} style={styles.body}>Booking payment · {formatMoney(p.amount_paise)}{demo?' · simulated':''}</Text>)}
+    {(load.data?.order.creditPaise??0)>0&&<Text style={styles.body}>Credits used · {formatMoney(load.data!.order.creditPaise)}</Text>}
     {load.data?.changes.map(c=><Text key={c.id} style={styles.body}>{c.kind} · {formatMoney(c.delta_paise)}{demo?' · simulated':''}</Text>)}
-    {load.data?.refunds.map(r=><View key={r.id}><Text style={styles.body}>Refund · {formatMoney(r.amount_paise)} · {r.status.replaceAll('_',' ')}</Text><Text style={styles.subtitle}>Cancellation fee · {formatMoney(r.fee_paise)}</Text></View>)}
+    {load.data?.refunds.map(r=><View key={r.id}><Text style={styles.body}>Refund · {formatMoney(r.amount_paise)} · {r.status.replaceAll('_',' ')}</Text><Text style={styles.subtitle}>To wallet · {formatMoney(r.credit_paise)}; to payment source · {formatMoney(r.amount_paise-r.credit_paise)}</Text><Text style={styles.subtitle}>Cancellation fee · {formatMoney(r.fee_paise)}</Text></View>)}
     {load.data?.prints.map(p=><Text key={p.id} style={styles.body}>Album {p.id.slice(0,8)} · {formatMoney(p.total_paise)} · {p.status.replaceAll('_',' ')}</Text>)}
     <Button title={demo?'Download demo statement (PDF)':'Download invoice'} secondary busy={a.busy} onPress={()=>void a.run(async()=>{const file=await api<{filename:string;base64:string}>(`/orders/${id}/statement`);await savePdf(file.filename,file.base64);})}/>
   </View>;

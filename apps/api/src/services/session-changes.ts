@@ -1,3 +1,4 @@
+import {splitRefund,returnCredit} from './credits';
 import {z} from 'zod';
 import {pointInPolygon,quotePrice,sessionSchema,validateSessionTime,type SessionInput} from '@kamraw/domain';
 import {EntityManager} from 'typeorm';
@@ -73,10 +74,13 @@ export class SessionChangeService {
         if(roles.length!==x.data.roles.length||roles.some(r=>!responses.some(a=>a.role_id===r.id&&a.creator_id===r.creatorId)||!x.data.roles.some(p=>p.id===r.id&&p.creatorId===r.creatorId)))throw new AppError(409,'AWAITING_CREATORS','Every creator must accept before you pay for the extension');
         await this.conflicts(m,roles,end);for(const r of roles){const add=requireValue(x.data.roles.find(p=>p.id===r.id));await m.getRepository(RoleEntity).update(r.id,{reservedEnd:new Date(end.getTime()+30*60000),earningPaise:r.earningPaise+add.earningPaise});}
       }
-      await m.getRepository(SessionEntity).update(s.id,{input:x.data.input,startAt:start,endAt:end,totalPaise:x.data.totalPaise,zoneId:x.data.zoneId,...(x.kind==='reschedule'?{status:'confirmed' as const}:{})});
+      await m.query('SELECT id FROM orders WHERE id=$1 FOR UPDATE',[s.orderId]);await m.query('SELECT id FROM accounts WHERE id=$1 FOR UPDATE',[customerId]);
+      const creditRefund=x.delta_paise<0?splitRefund(-x.delta_paise,s.totalPaise,s.creditPaise).creditPaise:0;
+      await returnCredit(m,customerId,s.id,`change:${x.id}`,creditRefund);
+      await m.getRepository(SessionEntity).update(s.id,{creditPaise:s.creditPaise-creditRefund,input:x.data.input,startAt:start,endAt:end,totalPaise:x.data.totalPaise,zoneId:x.data.zoneId,...(x.kind==='reschedule'?{status:'confirmed' as const}:{})});
       await m.query('UPDATE orders SET total_paise=total_paise+$2 WHERE id=$1',[s.orderId,x.delta_paise]);
-      if(x.delta_paise!==0)await this.repo.ledger(m,`demo-change:${x.id}`,s.orderId,[{account:'gateway_clearing',amountPaise:x.delta_paise},{account:'customer_deposits',amountPaise:-x.delta_paise}]);
-      await m.query("UPDATE session_changes SET status='applied',applied_at=$2 WHERE id=$1",[x.id,now]);await this.repo.audit(m,customerId,`${x.kind}_applied`,s.id,{changeId:x.id,deltaPaise:x.delta_paise,settlement:'simulated'});await this.repo.event(m,`${x.kind}_applied`,s.id);return {...x,status:'applied',settlement:'simulated'};
+      if(x.delta_paise!==0)await this.repo.ledger(m,`demo-change:${x.id}`,s.orderId,[{account:'gateway_clearing',amountPaise:x.delta_paise+creditRefund},{account:'customer_credit_liability',amountPaise:-creditRefund},{account:'customer_deposits',amountPaise:-x.delta_paise}]);
+      await m.query("UPDATE session_changes SET status='applied',applied_at=$2,credit_refund_paise=$3 WHERE id=$1",[x.id,now,creditRefund]);await this.repo.audit(m,customerId,`${x.kind}_applied`,s.id,{changeId:x.id,deltaPaise:x.delta_paise,settlement:'simulated'});await this.repo.event(m,`${x.kind}_applied`,s.id);return {...x,status:'applied',settlement:'simulated'};
     });
   }
 }

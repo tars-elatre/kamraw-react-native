@@ -18,7 +18,7 @@ export class PaymentRecordsService {
     const [payments,refunds,changes,prints]=await Promise.all([
       this.repo.db.query('SELECT id,provider,amount_paise,currency,created_at FROM payment_events WHERE order_id=$1 ORDER BY created_at',[orderId]),
       this.repo.db.query('SELECT r.* FROM refunds r JOIN sessions s ON s.id=r.session_id WHERE s.order_id=$1 ORDER BY r.created_at',[orderId]),
-      this.repo.db.query("SELECT c.id,c.kind,c.delta_paise,c.applied_at FROM session_changes c JOIN sessions s ON s.id=c.session_id WHERE s.order_id=$1 AND c.status='applied' ORDER BY c.applied_at",[orderId]),
+      this.repo.db.query("SELECT c.id,c.kind,c.delta_paise,c.credit_refund_paise,c.applied_at FROM session_changes c JOIN sessions s ON s.id=c.session_id WHERE s.order_id=$1 AND c.status='applied' ORDER BY c.applied_at",[orderId]),
       this.repo.db.query("SELECT p.id,p.status,p.total_paise,p.proof_approved_at FROM print_orders p JOIN galleries g ON g.id=p.gallery_id WHERE g.order_id=$1 AND p.proof_approved_at IS NOT NULL ORDER BY p.created_at",[orderId])
     ]);
     return {order,payments,refunds,changes,prints,demo:this.demo};
@@ -46,8 +46,9 @@ export class PaymentRecordsService {
     line('Payments',true,14);
     if(!data.payments.length)line('No payment has been recorded.');
     for(const p of data.payments)line(`${new Date(p.created_at).toISOString().slice(0,10)}   Simulated booking payment   ${money(p.amount_paise)}`);
-    if(data.changes.length){y-=10;line('Booking changes',true,14);for(const c of data.changes)line(`${new Date(c.applied_at).toISOString().slice(0,10)}   ${c.kind}   ${money(c.delta_paise)} (simulated)`);}
-    if(data.refunds.length){y-=10;line('Cancellation refunds',true,14);for(const r of data.refunds){line(`Refund ${r.id.slice(0,8)}   ${money(r.amount_paise)}   ${r.status.replaceAll('_',' ')}`);line(`Cancellation fee retained: ${money(r.fee_paise)}`);}}
+    if(data.order.creditPaise)line(`Kamraw credit applied at checkout: ${money(data.order.creditPaise)}`);
+    if(data.changes.length){y-=10;line('Booking changes',true,14);for(const c of data.changes){line(`${new Date(c.applied_at).toISOString().slice(0,10)}   ${c.kind}   ${money(c.delta_paise)} (simulated)`);if(c.credit_refund_paise)line(`Of this refund, ${money(c.credit_refund_paise)} returned to wallet.`);}}
+    if(data.refunds.length){y-=10;line('Cancellation refunds',true,14);for(const r of data.refunds){line(`Refund ${r.id.slice(0,8)}   ${money(r.amount_paise)}   ${r.status.replaceAll('_',' ')}`);line(`Returned to wallet: ${money(r.credit_paise)}; to payment source: ${money(r.amount_paise-r.credit_paise)}`);line(`Cancellation fee retained: ${money(r.fee_paise)}`);}}
     if(data.prints.length){y-=10;line('Album orders (separate from booking value)',true,14);for(const p of data.prints)line(`${p.id.slice(0,8)}   ${money(p.total_paise)}   ${p.status.replaceAll('_',' ')} (simulated)`);}
     y-=14;line('Need help? Open Help & support in your Kamraw profile.',false,10);
     line('Commercial prices, tax details and policies require approval before launch.',false,10);

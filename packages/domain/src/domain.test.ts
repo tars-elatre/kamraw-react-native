@@ -1,4 +1,4 @@
-import {assertBalanced,assertTransition,cancellation,distanceMetres,earliestStart,earliestServiceStart,eligibleCandidates,pointInPolygon,quotePrice,safeToFormat, type BookingInput,type Candidate,type RateCard,type Zone} from './index';
+import {assertBalanced,assertTransition,formatMoney,cancellation,distanceMetres,earliestStart,earliestServiceStart,eligibleCandidates,pointInPolygon,quotePrice,safeToFormat, type BookingInput,type Candidate,type RateCard,type Zone} from './index';
 const now=new Date('2026-09-30T08:37:00Z');
 const zone:Zone={id:'chennai',name:'Test zone',polygon:[{lat:12,lng:79},{lat:14,lng:79},{lat:14,lng:81},{lat:12,lng:81}],active:true,onDemand:true,leadMinutes:120,feePaise:0,openHour:4,closeHour:22};
 const card:RateCard={version:1,rates:{'photo:T1':{hourPaise:100000,earningHourPaise:60000}},addons:{preview:20000},taxBps:1800,urgencyBps:1000,peakBps:2000,peakCapPaise:100000,earlyBps:500,peakDates:[],cancellationBps:[0,2500,5000,7500,10000],retentionDays:365};
@@ -19,3 +19,5 @@ test('tier is per discipline and conflicting creator is ineligible',()=>{const c
 test('double entry rejects imbalanced or fractional money',()=>{expect(()=>assertBalanced([{account:'cash',amountPaise:100},{account:'revenue',amountPaise:-99}])).toThrow();expect(()=>assertBalanced([{account:'cash',amountPaise:100},{account:'revenue',amountPaise:-100}])).not.toThrow();});
 
 test('earliest service slot respects India opening hours across midnight and zone overrides',()=>{expect(earliestServiceStart(new Date('2026-09-30T14:45:00Z')).toISOString()).toBe('2026-09-30T22:30:00.000Z');expect(earliestServiceStart(new Date('2026-09-30T12:00:00Z'),180,8,20).toISOString()).toBe('2026-10-01T02:30:00.000Z');expect(earliestServiceStart(now).toISOString()).toBe(earliestStart(now).toISOString());});
+
+test('money display preserves paise instead of rounding payment totals',()=>expect(formatMoney(123456)).toBe('₹1,234.56'));

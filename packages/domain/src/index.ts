@@ -88,4 +88,4 @@ export function safeToFormat(files:{bytes:number;checksum:string;verifiedChecksu
   return expectedCount>0&&files.length===expectedCount&&files.reduce((t,f)=>t+f.bytes,0)===expectedBytes&&files.every(f=>f.status==='verified'&&f.checksum===f.verifiedChecksum&&f.copies>=2);
 }
 export function assertBalanced(entries:{account:string;amountPaise:number}[]) {if(entries.length<2||entries.some(e=>!Number.isSafeInteger(e.amountPaise))||entries.reduce((t,e)=>t+e.amountPaise,0)!==0)throw new Error('Ledger transaction must balance');}
-export const formatMoney=(paise:number)=>new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',maximumFractionDigits:0}).format(paise/100);
+export const formatMoney=(paise:number)=>new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',minimumFractionDigits:0,maximumFractionDigits:2}).format(paise/100);
