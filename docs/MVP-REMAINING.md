@@ -13,7 +13,7 @@ This is a working gap list against the supplied PRD, not a claim of complete cov
 
 ## Launch dependencies and infrastructure work
 
-- Real Auth0, payment, KYC, maps/traffic, messaging/masked calls and print-provider accounts. User explicitly requested demo credentials; these services must stay labeled as simulations until connected.
+- Real SMS verification, staff MFA provisioning, payment, KYC, maps/traffic, messaging/masked calls and print-provider accounts. User explicitly requested demo credentials; these services must stay labeled as simulations until connected.
 - Legal billing identity, approved rates/tax/policies, GST invoices/credit notes, and a commercial credit expiry policy. Current PDFs are clearly labeled demo statements.
 - Independent durable media storage and restore checks. Demo uploads use two same-host copies, are capped at 50 MB per card and never authorize memory-card erasure.
 - Native device QA, signed builds and store delivery. Android/iOS/web JavaScript bundles export successfully; full Xcode and signing accounts are not available.

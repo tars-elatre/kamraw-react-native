@@ -1,3 +1,5 @@
+import {rateLimit} from 'express-rate-limit';
+import {AuthenticationService} from '../services/authentication';
 import {pipeline} from 'node:stream/promises';
 import {CreatorProfileService} from '../services/creator-profile';
 import {SessionTimingService} from '../services/session-timing';
@@ -26,6 +28,12 @@ import {categories,earliestServiceStart} from '@kamraw/domain';
 export function routes(repo:PlatformRepository,env:Env){
   const records=new PaymentRecordsService(repo,env.APP_MODE==='demo'),profiles=new CreatorProfileService(repo,env.APP_MODE==='demo'),ratings=new RatingService(repo),timing=new SessionTimingService(repo);
   const router=Router(),booking=new BookingService(repo),changes=new SessionChangeService(repo),recovery=new RecoveryService(repo),prints=new PrintService(repo,env.APP_MODE==='demo'),privacy=new PrivacyService(repo,env.APP_MODE==='demo'),dispatch=new DispatchService(repo),session=new SessionService(repo,env.APP_MODE==='demo'),media=new MediaService(repo,env.MEDIA_ROOT,env.APP_MODE==='demo'),ops=new OperationsService(repo,env.APP_MODE==='demo'),account=new AccountService(repo),query=new QueryService(repo);
+  const auth=new AuthenticationService(repo,env.APP_MODE==='demo');
+  router.use('/auth',rateLimit({windowMs:15*60000,limit:100,standardHeaders:'draft-8',legacyHeaders:false}),(_req,res,next)=>{res.setHeader('Cache-Control','no-store');next();});
+  router.post('/auth/demo',respond(req=>auth.demoLogin(req.body)));
+  router.post('/auth/phone/start',respond(req=>auth.requestCode(req.body)));
+  router.post('/auth/phone/verify',respond(req=>auth.verifyCode(req.body)));
+  router.post('/auth/logout',respond(req=>auth.logout(req.headers.authorization?.replace(/^Bearer /,''))));
   router.get('/catalog',respond(async()=>{const config=await repo.config(),now=new Date(),available=config.zones.filter(z=>z.active&&z.onDemand).map(z=>earliestServiceStart(now,z.leadMinutes,z.openHour,z.closeHour));return {...config,categories,serverTime:now.toISOString(),earliestStart:available.length?new Date(Math.min(...available.map(d=>d.getTime()))).toISOString():null,mode:env.APP_MODE};}));
   router.get('/demo/accounts',respond(async()=>{if(env.APP_MODE!=='demo')throw new AppError(404,'NOT_FOUND','Not found');return repo.db.query("SELECT name,role,replace(subject,'demo:','') AS handle FROM accounts WHERE subject LIKE 'demo:%' ORDER BY role,name");}));
   router.post('/shared/:token',respond(req=>media.sharedTickets(z.string().min(40).max(100).parse(req.params.token),z.object({pin:z.string().optional()}).parse(req.body).pin)));

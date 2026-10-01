@@ -21,7 +21,7 @@ npm run dev:web
 npm run start -w @kamraw/mobile
 ```
 
-Run the worker separately with `npm run worker -w @kamraw/api`. For Expo's browser preview, use `npx expo start --web` from `apps/mobile`. Physical devices need the computer's LAN address in `EXPO_PUBLIC_API_URL`. Use a development client for native Auth0; Expo Go does not include the native module.
+Run the worker separately with `npm run worker -w @kamraw/api`. For Expo's browser preview, use `npx expo start --web` from `apps/mobile`. Physical devices need the computer's LAN address in `EXPO_PUBLIC_API_URL`. Sign in with your phone using the displayed demo verification code, or open a sample customer/creator workspace. Kamraw manages its own sessions; no Auth0 tenant or native Auth0 module is required.
 
 ## Demo workspaces
 
