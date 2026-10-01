@@ -4,6 +4,7 @@ import {createHmac,timingSafeEqual} from 'node:crypto';
 import {PlatformRepository} from '../repositories/platform';
 import {BookingService} from '../services/bookings';
 import {DispatchService} from '../services/dispatch';
+import {PrivacyService} from '../services/privacy';
 import {PrintService} from '../services/prints';
 import {RecoveryService} from '../services/recovery';
 import {SessionChangeService} from '../services/session-changes';
@@ -18,7 +19,7 @@ import {id,page,respond} from '../controllers/platform';
 import type {Env} from '../config/env';
 import {categories,earliestStart} from '@kamraw/domain';
 export function routes(repo:PlatformRepository,env:Env){
-  const router=Router(),booking=new BookingService(repo),changes=new SessionChangeService(repo),recovery=new RecoveryService(repo),prints=new PrintService(repo,env.APP_MODE==='demo'),dispatch=new DispatchService(repo),session=new SessionService(repo,env.APP_MODE==='demo'),media=new MediaService(repo,env.MEDIA_ROOT,env.APP_MODE==='demo'),ops=new OperationsService(repo,env.APP_MODE==='demo'),account=new AccountService(repo),query=new QueryService(repo);
+  const router=Router(),booking=new BookingService(repo),changes=new SessionChangeService(repo),recovery=new RecoveryService(repo),prints=new PrintService(repo,env.APP_MODE==='demo'),privacy=new PrivacyService(repo,env.APP_MODE==='demo'),dispatch=new DispatchService(repo),session=new SessionService(repo,env.APP_MODE==='demo'),media=new MediaService(repo,env.MEDIA_ROOT,env.APP_MODE==='demo'),ops=new OperationsService(repo,env.APP_MODE==='demo'),account=new AccountService(repo),query=new QueryService(repo);
   router.get('/catalog',respond(async()=>({...await repo.config(),categories,serverTime:new Date().toISOString(),earliestStart:earliestStart(new Date()).toISOString(),mode:env.APP_MODE})));
   router.get('/demo/accounts',respond(async()=>{if(env.APP_MODE!=='demo')throw new AppError(404,'NOT_FOUND','Not found');return repo.db.query("SELECT name,role,replace(subject,'demo:','') AS handle FROM accounts WHERE subject LIKE 'demo:%' ORDER BY role,name");}));
   router.post('/shared/:token',respond(req=>media.sharedTickets(z.string().min(40).max(100).parse(req.params.token),z.object({pin:z.string().optional()}).parse(req.body).pin)));
@@ -27,6 +28,8 @@ export function routes(repo:PlatformRepository,env:Env){
   router.use(authentication(env,repo));
   const uid=(req:Parameters<typeof principal>[0])=>principal(req).account.id;
   router.get('/me',respond(async req=>principal(req).account));router.put('/me',respond(req=>account.profile(uid(req),req.body)));router.post('/me/privacy',respond(req=>account.privacy(uid(req),req.body),201));
+  router.get('/me/privacy/:id/data',respond(req=>privacy.export(uid(req),id(req))));
+  router.get('/me/privacy',respond(req=>privacy.requests(uid(req))));router.get('/me/exports/:id',async(req,res)=>{const data=await privacy.export(uid(req),id(req));res.setHeader('Cache-Control','no-store');res.attachment('kamraw-personal-data.json').json(data);});router.get('/ops/privacy',permit('privacy'),respond(()=>privacy.queue()));router.post('/ops/privacy/:id/review',permit('privacy'),respond(req=>privacy.review(uid(req),id(req),req.body)));
   router.post('/quotes',respond(req=>booking.quote(uid(req),req.body),201));router.post('/checkout',respond(req=>booking.checkout(uid(req),z.object({quoteId:z.uuid()}).parse(req.body).quoteId),201));
   router.post('/orders/:id/demo-pay',respond(async req=>{if(env.APP_MODE!=='demo')throw new AppError(404,'NOT_FOUND','Not found');const result=await booking.demoPay(uid(req),id(req));const roles=await repo.db.query('SELECT r.id FROM roles r JOIN sessions s ON s.id=r.session_id WHERE s.order_id=$1',[id(req)]) as {id:string}[];for(const r of roles)await dispatch.dispatch(r.id);return result;}));
   router.get('/orders',respond(req=>query.bookings(uid(req),page(req))));router.get('/orders/:id',respond(req=>repo.orderDetail(id(req),uid(req))));
@@ -58,7 +61,7 @@ export function routes(repo:PlatformRepository,env:Env){
   router.get('/ops/incidents',permit('operations'),respond(()=>repo.db.query('SELECT i.*,o.code FROM incidents i JOIN sessions s ON s.id=i.session_id JOIN orders o ON o.id=s.order_id ORDER BY i.created_at DESC LIMIT 100')));router.get('/ops/dashboard',permit('operations'),respond(()=>ops.dashboard()));router.get('/ops/creators',permit('onboarding'),respond(()=>ops.creators()));router.put('/ops/creators/:id',permit('onboarding'),respond(req=>ops.reviewCreator(uid(req),id(req),req.body)));
   router.get('/ops/dispatch',permit('dispatch'),respond(()=>dispatch.board()));router.get('/ops/roles/:id/candidates',permit('dispatch'),respond(req=>dispatch.manualCandidates(id(req))));router.post('/ops/roles/:id/offer',permit('dispatch'),respond(req=>dispatch.manualOffer(uid(req),id(req),req.body)));
   router.post('/ops/roles/:id/dispatch',permit('dispatch'),respond(req=>dispatch.dispatch(id(req))));router.post('/ops/incidents/:id/acknowledge',permit('operations'),respond(req=>ops.acknowledge(uid(req),id(req))));
-  router.get('/ops/configurations',permit('config:write'),respond(()=>ops.configurations()));router.post('/ops/configurations',permit('config:write'),respond(req=>ops.propose(uid(req),req.body),201));router.post('/ops/configurations/:id/approve',permit('config:approve'),respond(req=>ops.approveConfig(uid(req),id(req))));
+  router.get('/ops/configurations',permit('config:read'),respond(()=>ops.configurations()));router.post('/ops/configurations',permit('config:write'),respond(req=>ops.propose(uid(req),req.body),201));router.post('/ops/configurations/:id/approve',permit('config:approve'),respond(req=>ops.approveConfig(uid(req),id(req))));
   router.post('/ops/assets/:id/ticket',permit('qc'),respond(req=>media.reviewTicket(uid(req),id(req))));router.get('/ops/qc',permit('qc'),respond(()=>ops.qcQueue()));router.get('/ops/qc/:id/assets',permit('qc'),respond(req=>ops.qcAssets(id(req))));router.put('/ops/assets/:id/review',permit('qc'),respond(req=>ops.reviewAsset(uid(req),id(req),req.body)));router.post('/ops/galleries/:id/publish',permit('qc'),respond(req=>ops.publish(uid(req),id(req),req.body)));
   router.get('/ops/tickets',permit('support'),respond(req=>query.tickets(uid(req),true)));router.post('/ops/tickets/:id/messages',permit('support'),respond(req=>query.ticketReply(uid(req),id(req),z.object({body:z.string().min(1).max(4000)}).parse(req.body).body,true)));
   router.get('/ops/finance',permit('finance'),respond(()=>ops.finance()));router.post('/ops/payouts',permit('payout:create'),respond(req=>ops.generatePayout(uid(req)),201));router.post('/ops/payouts/:id/approve',permit('payout:approve'),respond(req=>ops.approvePayout(uid(req),id(req))));router.get('/ops/audit',permit('audit'),respond(()=>ops.audit()));

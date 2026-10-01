@@ -16,6 +16,7 @@ export class BookingService {
   async checkout(customerId:string,quoteId:string,now=new Date()){
     return this.repo.db.transaction(async m=>{
       const quote=requireValue(await m.getRepository(QuoteEntity).findOne({where:{id:quoteId,customerId},lock:{mode:'pessimistic_write'}}));
+      const [active]=await m.query('SELECT id FROM accounts WHERE id=$1 AND disabled_at IS NULL FOR UPDATE',[customerId]);if(!active)throw new AppError(401,'ACCOUNT_CLOSED','This account is closed');
       if(quote.orderId)return this.repo.order(quote.orderId,m);
       if(quote.expiresAt<=now)throw new AppError(409,'QUOTE_EXPIRED','Your quote has expired. Refresh the price to continue.');
       const order=await m.getRepository(OrderEntity).save({customerId,quoteId,category:quote.input.category,totalPaise:quote.price.totalPaise,currency:'INR',status:'payment_pending'});
@@ -25,6 +26,7 @@ export class BookingService {
   async confirmPayment(event:{id:string;orderId:string;amountPaise:number;currency:string;provider:string},now=new Date()){
     return this.repo.db.transaction(async m=>{
       const order=requireValue(await m.getRepository(OrderEntity).findOne({where:{id:event.orderId},lock:{mode:'pessimistic_write'}}));
+      const [active]=await m.query('SELECT id FROM accounts WHERE id=$1 AND disabled_at IS NULL FOR UPDATE',[order.customerId]);if(!active)throw new AppError(409,'ACCOUNT_CLOSED','This account is closed; payment reconciliation is required');
       if(order.totalPaise!==event.amountPaise||event.currency!=='INR')throw new AppError(422,'PAYMENT_MISMATCH','Payment amount or currency does not match');
       const prior=await m.query('SELECT order_id FROM payment_events WHERE id=$1',[event.id]) as {order_id:string}[];
       if(prior.length){if(prior[0]!.order_id!==order.id)throw new AppError(409,'EVENT_REUSED','Payment event already consumed');return order;}

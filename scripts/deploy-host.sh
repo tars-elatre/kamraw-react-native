@@ -29,7 +29,7 @@ if [ "$READY" != true ]; then
   exit 1
 fi
 docker rm -f kamraw-worker 2>/dev/null || true
-docker run -d --name kamraw-worker --restart unless-stopped --network host --env-file runtime.env --read-only --tmpfs /tmp:rw,noexec,nosuid,size=32m --cap-drop ALL --security-opt no-new-privileges --memory 256m --log-driver awslogs --log-opt awslogs-region="$AWS_REGION" --log-opt awslogs-group=/kamraw/demo --log-opt awslogs-stream=worker "$IMAGE" node apps/api/dist/workers/run.js >/dev/null
+docker run -d --name kamraw-worker --restart unless-stopped --network host --env-file runtime.env --read-only --tmpfs /tmp:rw,noexec,nosuid,size=32m --cap-drop ALL --security-opt no-new-privileges --memory 256m --log-driver awslogs --log-opt awslogs-region="$AWS_REGION" --log-opt awslogs-group=/kamraw/demo --log-opt awslogs-stream=worker -v /opt/kamraw/media:/data/media "$IMAGE" node apps/api/dist/workers/run.js >/dev/null
 cat > Caddyfile <<CADDY
 $DOMAIN {
   encode zstd gzip
