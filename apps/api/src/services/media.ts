@@ -1,6 +1,8 @@
 import {createHash,createHmac,randomBytes,scryptSync,timingSafeEqual} from 'node:crypto';
 import {mkdir,open,copyFile,readFile,stat} from 'node:fs/promises';
 import path from 'node:path';
+import type {Readable} from 'node:stream';
+import {ZipFile} from 'yazl';
 import {z} from 'zod';
 import {safeToFormat} from '@kamraw/domain';
 import {PlatformRepository} from '../repositories/platform';
@@ -13,9 +15,43 @@ const digest=(v:string|Buffer)=>createHash('sha256').update(v).digest('hex');
 const ticketKey=randomBytes(32);
 type MediaTicket={asset:string;gallery:string;share?:string;owner?:string;download:boolean;staff?:string;exp:number};
 function issueTicket(data:Omit<MediaTicket,'exp'>){const body=Buffer.from(JSON.stringify({...data,exp:Date.now()+300000})).toString('base64url');return `${body}.${createHmac('sha256',ticketKey).update(body).digest('base64url')}`;}
+function readTicket(ticket:string):MediaTicket {
+  const [body,signature,...extra]=ticket.split('.');
+  if(!body||!signature||extra.length)throw new AppError(401,'INVALID_TICKET','Refresh the gallery to download');
+  const expected=createHmac('sha256',ticketKey).update(body).digest(),actual=Buffer.from(signature,'base64url');
+  if(actual.length!==expected.length||!timingSafeEqual(actual,expected))throw new AppError(401,'INVALID_TICKET','Refresh the gallery to download');
+  const data=JSON.parse(Buffer.from(body,'base64url').toString()) as MediaTicket;
+  if(data.exp<Date.now())throw new AppError(403,'EXPIRED_TICKET','Refresh the gallery to download');
+  return data;
+}
 const manifestSchema=z.object({sessionId:z.uuid(),files:z.array(z.object({filename:z.string().min(1).max(200).regex(/^[^/\\]+\.(?:cr3|nef|arw|raf|dng|png|webp|jpe?g|heif|heic|mp4|mov|wav)$/i),bytes:z.number().int().positive().max(150*1024**3),checksum:z.string().regex(/^[a-f0-9]{64}$/),kind:z.enum(['original','edited']).default('original')})).min(1).max(10000)});
 export class MediaService {
   constructor(private repo:PlatformRepository,private root:string,private demo:boolean){}
+  async archiveTicket(accountId:string,galleryId:string){
+    const gallery=await this.gallery(accountId,galleryId);
+    if(gallery.status!=='final_ready'||gallery.expires_at&&new Date(gallery.expires_at)<=new Date())throw new AppError(409,'FINAL_REQUIRED','Download all is available while your final gallery is active');
+    if(!gallery.assets.length)throw new AppError(409,'EMPTY_GALLERY','Your gallery does not have final files yet');
+    return {ticket:issueTicket({asset:'archive',gallery:galleryId,owner:accountId,download:true})};
+  }
+  async archive(galleryId:string,ticket:string){
+    const data=readTicket(ticket);
+    if(data.asset!=='archive'||data.gallery!==galleryId||!data.owner||!data.download)throw new AppError(403,'INVALID_TICKET','This ticket cannot download the gallery');
+    const gallery=await this.gallery(data.owner,galleryId);
+    if(gallery.status!=='final_ready'||gallery.expires_at&&new Date(gallery.expires_at)<=new Date())throw new AppError(404,'NOT_FOUND','This gallery has expired');
+    if(!gallery.assets.length)throw new AppError(409,'EMPTY_GALLERY','Your gallery does not have final files yet');
+    const files:{filename:string;name:string}[]=[];
+    for(const asset of gallery.assets){
+      const {filename}=await this.file(asset.id);
+      // Prefix prevents collisions; sanitization prevents paths and control characters in archives.
+      const name=`${asset.id}-${asset.filename.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
+      files.push({filename,name});
+    }
+    const zip=new ZipFile(),stream=zip.outputStream as Readable;
+    zip.on('error',error=>stream.destroy(error));
+    for(const file of files)zip.addFile(file.filename,file.name,{compress:false});
+    zip.end();
+    return stream;
+  }
   async manifest(accountId:string,body:unknown){const input=manifestSchema.parse(body),c=await this.repo.creator(accountId);const role=await this.repo.db.getRepository(RoleEntity).createQueryBuilder('r').where('r.sessionId=:sessionId AND r.creatorId=:creatorId',{sessionId:input.sessionId,creatorId:c.id}).andWhere("r.status NOT IN ('cancelled','refunded')").getOne();if(!role)throw new AppError(404,'NOT_FOUND','Session not found');
     if(!['session_completed','media_verified','editing','preview_delivered'].includes(role.status))throw new AppError(409,'SESSION_INCOMPLETE','Complete the session before uploading');
     if(!this.demo)throw new AppError(503,'STORAGE_REQUIRED','Production object storage is not configured');
