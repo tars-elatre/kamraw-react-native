@@ -20,6 +20,14 @@ const transitions: Record<Status,Status[]> = {
 export function assertTransition(from:Status,to:Status):void { if(!transitions[from].includes(to)) throw new Error(`Cannot move from ${from} to ${to}`); }
 export function earliestStart(now:Date,leadMinutes=120):Date { return new Date(Math.ceil((now.getTime()+leadMinutes*60000)/900000)*900000); }
 export function serviceHour(date:Date):number { const d=new Date(date.getTime()+330*60000);return d.getUTCHours()+d.getUTCMinutes()/60; }
+export function earliestServiceStart(now:Date,leadMinutes=120,openHour=4,closeHour=22):Date {
+  const first=earliestStart(now,leadMinutes),hour=serviceHour(first);
+  if(hour>=openHour&&hour<=closeHour)return first;
+  const india=new Date(first.getTime()+330*60000);
+  if(hour>closeHour)india.setUTCDate(india.getUTCDate()+1);
+  india.setUTCHours(Math.floor(openHour),Math.round((openHour%1)*60),0,0);
+  return new Date(india.getTime()-330*60000);
+}
 export function validateSessionTime(session:SessionInput,now:Date,leadMinutes:number,openHour=4,closeHour=22):void {
   const start=new Date(session.start);
   if(start.getTime()<earliestStart(now,leadMinutes).getTime()) throw new Error('Start time is earlier than the available lead time');

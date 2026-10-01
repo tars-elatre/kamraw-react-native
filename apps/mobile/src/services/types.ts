@@ -1,5 +1,5 @@
 import type {SessionInput,Price,RateCard,Zone} from '@kamraw/domain';
-export interface Catalog {rates:RateCard;zones:Zone[];categories:string[];earliestStart:string;mode:string}
+export interface Catalog {rates:RateCard;zones:Zone[];categories:string[];earliestStart:string|null;mode:string}
 export interface Order {id:string;code:string;category:string;status:string;totalPaise:number;createdAt:string}
 export interface SessionRow {id:string;input:SessionInput;status:string;startAt:string;endAt:string;completionCode:string}
 export interface OrderDetail extends Order {sessions:SessionRow[];price:Price;roles:{id:string;session_id:string;creator_name:string|null;tier:string;discipline:string}[]}

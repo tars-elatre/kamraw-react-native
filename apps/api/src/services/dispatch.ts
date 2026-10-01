@@ -46,7 +46,7 @@ export class DispatchService {
       await m.getRepository(CreatorEntity).findOne({where:{id:creator.id},lock:{mode:'pessimistic_write'}});
       const session=await this.repo.session(role.sessionId,m),order=await this.repo.order(session.orderId,m);if(!(await this.candidates(m,role,session,order.customerId)).some(c=>c.id===creator.id))throw new AppError(409,'UNAVAILABLE','Your availability or eligibility changed');
       const blocks=await m.query('SELECT 1 FROM availability WHERE creator_id=$1 AND NOT available AND tstzrange(start_at,end_at) && tstzrange($2,$3)',[creator.id,role.reservedStart,role.reservedEnd]);if(blocks.length)throw new AppError(409,'UNAVAILABLE','Your availability changed');
-      await m.getRepository(RoleEntity).update(role.id,{creatorId:creator.id,status:'assigned'});
+      await m.getRepository(RoleEntity).update(role.id,{creatorId:creator.id,status:'assigned'});await m.query('UPDATE roles SET assigned_at=$2 WHERE id=$1',[role.id,now]);
       await m.query("UPDATE offers SET status=CASE WHEN id=$1 THEN 'accepted' ELSE 'withdrawn' END WHERE role_id=$2 AND status='pending'",[offerId,role.id]);
       const open=await m.getRepository(RoleEntity).countBy({sessionId:role.sessionId,status:'confirmed'});if(!open)await m.getRepository(SessionEntity).update(role.sessionId,{status:'assigned'});
       await this.repo.audit(m,accountId,'offer_accepted',role.id,{offerId,score:offer.score});await this.repo.event(m,'creator_assigned',role.sessionId);return {...role,creatorId:creator.id,status:'assigned'};

@@ -18,6 +18,7 @@ import {RecoveryService} from '../src/services/recovery';
 import {SessionChangeService} from '../src/services/session-changes';
 import {BookingService} from '../src/services/bookings';
 import {DispatchService} from '../src/services/dispatch';
+import {ServiceReminders} from '../src/services/service-reminders';
 import {SessionService} from '../src/services/sessions';
 import {MediaService} from '../src/services/media';
 import {OperationsService} from '../src/services/operations';
@@ -116,6 +117,14 @@ suite('PostgreSQL platform integration',()=>{
  });
  test('expiry sends one appropriate reminder, revokes access and removes only expired media files',async()=>{
    const [asset]=await db.query("SELECT a.*,g.id AS gid FROM media_assets a JOIN galleries g ON g.id=a.gallery_id WHERE a.status='verified' AND a.kind='edited' AND g.status='final_ready' LIMIT 1"),now=new Date();await db.query('UPDATE galleries SET expires_at=$2 WHERE id=$1',[asset.gid,new Date(now.getTime()+3600000)]);const shared=await media.share(customer,asset.gid,{kind:'public',expiresAt:new Date(now.getTime()+86400000).toISOString(),allowDownload:false});const svc=new RetentionService(repo,root);await svc.tick(now);await svc.tick(now);const [reminders]=await db.query("SELECT count(*)::int AS n FROM outbox WHERE entity_id=$1 AND kind LIKE 'gallery_expiry_%'",[asset.gid]);expect(reminders.n).toBe(1);await expect(stat(path.join(root,'primary',asset.storage_key))).resolves.toBeDefined();await svc.tick(new Date(now.getTime()+2*3600000));await expect(media.shared(shared.token)).rejects.toMatchObject({code:'NOT_FOUND'});await expect(stat(path.join(root,'primary',asset.storage_key))).rejects.toMatchObject({code:'ENOENT'});const [purged]=await db.query('SELECT status,copies FROM media_assets WHERE id=$1',[asset.id]);expect(purged).toMatchObject({status:'purged',copies:0});
+ });
+ test('service reminders are deduplicated, localized and expose delayed matching refunds',async()=>{
+   const delayed=await paid(105),clock=new Date(),reminders=new ServiceReminders(repo);
+   await db.query("UPDATE sessions SET input=jsonb_set(input,'{mode}','\"on_demand\"') WHERE id=$1",[delayed.session.id]);await db.query('UPDATE roles SET dispatch_started_at=$2 WHERE id=$1',[delayed.role.id,new Date(clock.getTime()-16*60000)]);
+   await reminders.tick(clock);await reminders.tick(clock);const [count]=await db.query("SELECT count(*)::int AS n FROM service_reminders WHERE role_id=$1 AND kind IN ('assignment_overdue','assignment_choice')",[delayed.role.id]);expect(count.n).toBe(2);expect((await booking.cancelPreview(customer,delayed.session.id,clock)).platformFault).toBe(true);
+   const planned=await paid(106),creator=await repo.creator(creatorAccount),promptAt=new Date(planned.session.startAt.getTime()-24*3600000);await db.getRepository(RoleEntity).update(planned.role.id,{creatorId:creator.id,status:'assigned'});await db.getRepository(SessionEntity).update(planned.session.id,{status:'assigned'});await db.query('UPDATE roles SET assigned_at=$2 WHERE id=$1',[planned.role.id,new Date(promptAt.getTime()-3600000)]);await db.getRepository(AccountEntity).update(creatorAccount,{language:'ta'});
+   await reminders.tick(promptAt);await reminders.tick(new Date(promptAt.getTime()+2*3600000));await reminders.tick(new Date(promptAt.getTime()+2*3600000));const [late]=await db.query("SELECT count(*)::int AS n FROM service_reminders WHERE role_id=$1 AND kind='reconfirmation_overdue'",[planned.role.id]);expect(late.n).toBe(1);
+   for(let i=0;i<20&&await drainDemoOutbox(repo);i++);const [notice]=await db.query("SELECT n.title FROM notifications n JOIN outbox o ON o.id=n.event_id WHERE n.account_id=$1 AND o.entity_id=$2 AND o.kind='reconfirmation_due'",[creatorAccount,planned.role.id]);expect(notice.title).toContain('உறுதிசெய்யவும்');await db.getRepository(AccountEntity).update(creatorAccount,{language:'en'});
  });
  test('database rejects modification of audit and unbalanced ledger',async()=>{await expect(db.query('UPDATE audit SET action=$1',['changed'])).rejects.toThrow('Append-only');await expect(db.transaction(async m=>{const [t]=await m.query('INSERT INTO ledger_transactions(reference) VALUES($1) RETURNING id',[randomUUID()]);await m.query('INSERT INTO ledger_entries(transaction_id,account,amount_paise) VALUES($1,$2,$3)',[t.id,'cash',100]);})).rejects.toThrow('not balanced');});
 });

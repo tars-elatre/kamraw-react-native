@@ -20,7 +20,7 @@ export class RecoveryService {
    if(b.expectedPenaltyPaise!==penalty)throw new AppError(409,'PENALTY_CHANGED','Review the updated cancellation penalty before confirming');
    await m.getRepository(CreatorEntity).findOne({where:{id:creator.id},lock:{mode:'pessimistic_write'}});
    const [record]=await m.query('INSERT INTO creator_cancellations(role_id,creator_id,reason,strike,penalty_paise,created_at) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',[roleId,creator.id,b.reason,strike,penalty,now]);
-   await m.getRepository(RoleEntity).update(roleId,{creatorId:null,status:'confirmed'});await m.getRepository(SessionEntity).update(session.id,{status:'confirmed'});
+   await m.getRepository(RoleEntity).update(roleId,{creatorId:null,status:'confirmed'});await m.query('UPDATE roles SET assigned_at=NULL,dispatch_started_at=$2 WHERE id=$1',[roleId,now]);await m.getRepository(SessionEntity).update(session.id,{status:'confirmed'});
    await m.query("UPDATE offers SET status='withdrawn' WHERE role_id=$1 AND status IN ('pending','accepted')",[roleId]);await m.query("UPDATE session_changes SET status='dismissed' WHERE session_id=$1 AND status='pending'",[session.id]);
    const noShow=hours<2,credit=noShow?Math.round(session.totalPaise*.2):0;
    await m.query("INSERT INTO service_failures(session_id,role_id,kind,credit_paise) VALUES($1,$2,$3,$4) ON CONFLICT(role_id,kind) DO UPDATE SET status='pending',credit_paise=greatest(service_failures.credit_paise,EXCLUDED.credit_paise),created_at=now()",[session.id,roleId,noShow?'no_show':'creator_cancelled',credit]);

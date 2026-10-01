@@ -19,11 +19,11 @@ import {authentication,permit,principal} from '../middleware/auth';
 import {AppError} from '../middleware/errors';
 import {id,page,respond} from '../controllers/platform';
 import type {Env} from '../config/env';
-import {categories,earliestStart} from '@kamraw/domain';
+import {categories,earliestServiceStart} from '@kamraw/domain';
 export function routes(repo:PlatformRepository,env:Env){
   const records=new PaymentRecordsService(repo,env.APP_MODE==='demo');
   const router=Router(),booking=new BookingService(repo),changes=new SessionChangeService(repo),recovery=new RecoveryService(repo),prints=new PrintService(repo,env.APP_MODE==='demo'),privacy=new PrivacyService(repo,env.APP_MODE==='demo'),dispatch=new DispatchService(repo),session=new SessionService(repo,env.APP_MODE==='demo'),media=new MediaService(repo,env.MEDIA_ROOT,env.APP_MODE==='demo'),ops=new OperationsService(repo,env.APP_MODE==='demo'),account=new AccountService(repo),query=new QueryService(repo);
-  router.get('/catalog',respond(async()=>({...await repo.config(),categories,serverTime:new Date().toISOString(),earliestStart:earliestStart(new Date()).toISOString(),mode:env.APP_MODE})));
+  router.get('/catalog',respond(async()=>{const config=await repo.config(),now=new Date(),available=config.zones.filter(z=>z.active&&z.onDemand).map(z=>earliestServiceStart(now,z.leadMinutes,z.openHour,z.closeHour));return {...config,categories,serverTime:now.toISOString(),earliestStart:available.length?new Date(Math.min(...available.map(d=>d.getTime()))).toISOString():null,mode:env.APP_MODE};}));
   router.get('/demo/accounts',respond(async()=>{if(env.APP_MODE!=='demo')throw new AppError(404,'NOT_FOUND','Not found');return repo.db.query("SELECT name,role,replace(subject,'demo:','') AS handle FROM accounts WHERE subject LIKE 'demo:%' ORDER BY role,name");}));
   router.post('/shared/:token',respond(req=>media.sharedTickets(z.string().min(40).max(100).parse(req.params.token),z.object({pin:z.string().optional()}).parse(req.body).pin)));
   router.get('/media/:id',async(req,res)=>{const download=req.query.download==='1';const {asset,filename}=await media.authorizedFile(id(req),z.string().max(2000).parse(req.query.ticket),download);res.setHeader('Cache-Control','private, no-store');res.setHeader('Referrer-Policy','no-referrer');if(download)res.download(filename,asset.filename);else res.type(asset.filename).sendFile(filename);});
