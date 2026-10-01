@@ -1,0 +1,26 @@
+import React,{useState} from 'react';
+import {ActivityIndicator,Pressable,Text,View} from 'react-native';
+import {Button,Card,Chips,ErrorNotice,Field,color,styles} from './ui';
+import {useSession} from '../services/session';
+import {useAction,useLoad} from '../services/use-load';
+import type {CreatorCardData} from './creator-profile';
+type Kind='creator'|'delivery'|'customer';
+interface Feedback {ratings:{id:string;kind:Kind;creator_id:string|null;stars:number;tags:string[];comment:string}[];windows:{session:{open:boolean;closesAt:string|null};delivery:{open:boolean;closesAt:string|null}}}
+const tags:Record<Kind,readonly string[]>={creator:['punctual','friendly','clear_communication','great_quality','needs_improvement'],customer:['venue_ready','respectful','clear_communication','needs_improvement'],delivery:['delivery_quality','great_quality','needs_improvement']};
+const tamilTags:Record<string,string>={punctual:'நேரம் தவறாமை',friendly:'நட்பான அணுகுமுறை',clear_communication:'தெளிவான தகவல் தொடர்பு',great_quality:'சிறந்த தரம்',needs_improvement:'மேம்பாடு தேவை',venue_ready:'தயாரான இடம்',respectful:'மரியாதை',delivery_quality:'வழங்கலின் தரம்'};
+export function Rating({sessionId,asCreator=false}:{sessionId:string;asCreator?:boolean}){
+  const {api,user}=useSession(),ta=user?.language==='ta',a=useAction(),load=useLoad<Feedback>(`/sessions/${sessionId}/ratings`),crew=useLoad<CreatorCardData[]>(`/sessions/${sessionId}/creators`),[stars,setStars]=useState('5'),[kind,setKind]=useState<Kind>(asCreator?'customer':'creator'),[creatorId,setCreatorId]=useState(''),[selected,setSelected]=useState<string[]>([]),[comment,setComment]=useState('');
+  const creators=[...new Map((crew.data??[]).map(c=>[c.id,c])).values()],recipient=creatorId||creators[0]?.id,window=kind==='delivery'?load.data?.windows.delivery:load.data?.windows.session,prior=load.data?.ratings.find(r=>r.kind===kind&&(kind!=='creator'||r.creator_id===recipient));
+  function choose(next:Kind){setKind(next);setSelected([]);setComment('');a.setSuccess(null);}
+  return <Card><Text style={styles.section}>{ta?'உங்கள் அனுபவம் எப்படி இருந்தது?':'How was your experience?'}</Text><Text style={styles.subtitle}>{ta?'படப்பிடிப்பு முடிந்த 7 நாட்களுக்குள் கருத்தைப் பகிரவும். இறுதி வழங்கலுக்குப் பிறகு வழங்கல் மதிப்பீட்டிற்கு 7 நாட்கள் உண்டு.':'Review the shoot within 7 days of completion. Delivery reviews have a separate 7-day window after final delivery.'}</Text><ErrorNotice message={load.error??crew.error??a.error}/>{load.loading&&<ActivityIndicator/>}
+    {!asCreator&&<View style={styles.row}>{(['creator','delivery'] as const).map(k=><Pressable key={k} role="radio" accessibilityState={{checked:kind===k}} accessibilityLabel={ta?(k==='creator'?'படைப்பாளர்':'வழங்கல்'):k} onPress={()=>choose(k)} style={[styles.chip,kind===k&&{backgroundColor:color.ink}]}><Text style={{color:kind===k?color.white:color.ink}}>{ta?(k==='creator'?'படைப்பாளர்':'வழங்கல்'):(k==='creator'?'Creator':'Delivery')}</Text></Pressable>)}</View>}
+    {kind==='creator'&&creators.map(c=><Pressable key={c.id} role="radio" accessibilityState={{checked:recipient===c.id}} accessibilityLabel={`Review ${c.name}`} onPress={()=>{setCreatorId(c.id);setSelected([]);setComment('');a.setSuccess(null);}} style={[styles.chip,recipient===c.id&&{borderColor:color.red}]}><Text style={styles.body}>{c.name} · {c.tier} {c.discipline}</Text></Pressable>)}
+    {prior?<View style={{gap:8}}><Text style={styles.success}>{ta?'உங்கள் மதிப்பீடு பதிவு செய்யப்பட்டது':'Your review is recorded'} · {prior.stars} / 5</Text>{!!prior.comment&&<Text style={styles.body}>{prior.comment}</Text>}</View>:window?.open?<>
+      <Text style={styles.label}>{ta?'நட்சத்திர மதிப்பீடு':'Star rating'}</Text><Chips values={['1','2','3','4','5'] as const} value={stars} onChange={setStars}/>
+      <View style={{flexDirection:'row',flexWrap:'wrap',gap:8}}>{tags[kind].map(tag=><Pressable key={tag} role="checkbox" accessibilityState={{checked:selected.includes(tag)}} accessibilityLabel={ta?tamilTags[tag]:tag.replaceAll('_',' ')} onPress={()=>setSelected(selected.includes(tag)?selected.filter(t=>t!==tag):[...selected,tag])} style={[styles.chip,selected.includes(tag)&&{backgroundColor:color.ink}]}><Text style={{color:selected.includes(tag)?color.white:color.ink}}>{ta?tamilTags[tag]:tag.replaceAll('_',' ')}</Text></Pressable>)}</View>
+      <Field label={ta?'உங்கள் கருத்து':'Your review'} value={comment} onChangeText={setComment} multiline maxLength={2000}/>
+      <Button title={ta?'மதிப்பீட்டை அனுப்பு':'Submit review'} busy={a.busy} disabled={kind==='creator'&&!recipient} onPress={()=>void a.run(async()=>{await api(`/sessions/${sessionId}/ratings`,{kind,creatorId:kind==='creator'?recipient:undefined,stars:Number(stars),tags:selected,comment});await load.refresh();a.setSuccess(ta?'நன்றி. உங்கள் கருத்து பதிவு செய்யப்பட்டது.':'Thank you. Your review has been recorded.');})}/>
+    </>:load.data&&<Text style={styles.subtitle}>{window?.closesAt?(ta?'இந்த மதிப்பீட்டிற்கான காலம் முடிந்துவிட்டது.':'This review window is closed.'):(ta?'பணி முடிந்ததும் இந்த மதிப்பீடு திறக்கும்.':'This review opens after the work is complete.')}</Text>}
+    {a.success&&<Text style={styles.success}>{a.success}</Text>}
+  </Card>;
+}

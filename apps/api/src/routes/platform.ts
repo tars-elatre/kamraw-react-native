@@ -1,4 +1,6 @@
 import {pipeline} from 'node:stream/promises';
+import {CreatorProfileService} from '../services/creator-profile';
+import {RatingService} from '../services/ratings';
 import {PaymentRecordsService} from '../services/payment-records';
 import {Router,raw} from 'express';
 import {z} from 'zod';
@@ -21,7 +23,7 @@ import {id,page,respond} from '../controllers/platform';
 import type {Env} from '../config/env';
 import {categories,earliestServiceStart} from '@kamraw/domain';
 export function routes(repo:PlatformRepository,env:Env){
-  const records=new PaymentRecordsService(repo,env.APP_MODE==='demo');
+  const records=new PaymentRecordsService(repo,env.APP_MODE==='demo'),profiles=new CreatorProfileService(repo,env.APP_MODE==='demo'),ratings=new RatingService(repo);
   const router=Router(),booking=new BookingService(repo),changes=new SessionChangeService(repo),recovery=new RecoveryService(repo),prints=new PrintService(repo,env.APP_MODE==='demo'),privacy=new PrivacyService(repo,env.APP_MODE==='demo'),dispatch=new DispatchService(repo),session=new SessionService(repo,env.APP_MODE==='demo'),media=new MediaService(repo,env.MEDIA_ROOT,env.APP_MODE==='demo'),ops=new OperationsService(repo,env.APP_MODE==='demo'),account=new AccountService(repo),query=new QueryService(repo);
   router.get('/catalog',respond(async()=>{const config=await repo.config(),now=new Date(),available=config.zones.filter(z=>z.active&&z.onDemand).map(z=>earliestServiceStart(now,z.leadMinutes,z.openHour,z.closeHour));return {...config,categories,serverTime:now.toISOString(),earliestStart:available.length?new Date(Math.min(...available.map(d=>d.getTime()))).toISOString():null,mode:env.APP_MODE};}));
   router.get('/demo/accounts',respond(async()=>{if(env.APP_MODE!=='demo')throw new AppError(404,'NOT_FOUND','Not found');return repo.db.query("SELECT name,role,replace(subject,'demo:','') AS handle FROM accounts WHERE subject LIKE 'demo:%' ORDER BY role,name");}));
@@ -46,7 +48,11 @@ export function routes(repo:PlatformRepository,env:Env){
   router.post('/changes/:id/demo-apply',respond(req=>{if(env.APP_MODE!=='demo')throw new AppError(503,'PROVIDER_REQUIRED','Payment integration is not configured');return changes.applyDemo(uid(req),id(req),z.object({expectedDeltaPaise:z.number().int()}).parse(req.body).expectedDeltaPaise);}));
   router.get('/sessions/:id/cancellation',respond(req=>booking.cancelPreview(uid(req),id(req))));router.post('/sessions/:id/cancel',respond(req=>{const b=z.object({expectedFeePaise:z.number().int().nonnegative(),refundMethod:z.enum(['source','credit']).default('source')}).parse(req.body);return booking.cancel(uid(req),id(req),b.expectedFeePaise,new Date(),b.refundMethod);}));
   router.get('/sessions/:id/tracking',respond(req=>query.tracking(uid(req),id(req))));router.post('/sessions/:id/location',respond(req=>session.location(uid(req),id(req),req.body)));router.get('/sessions/:id/messages',respond(req=>query.messages(uid(req),id(req))));router.post('/sessions/:id/messages',respond(req=>account.message(uid(req),id(req),req.body),201));
-  router.post('/sessions/:id/incidents',respond(req=>ops.incident(uid(req),id(req),req.body),201));router.post('/sessions/:id/ratings',respond(req=>account.rating(uid(req),id(req),req.body),201));
+  router.post('/sessions/:id/incidents',respond(req=>ops.incident(uid(req),id(req),req.body),201));router.post('/sessions/:id/ratings',respond(req=>ratings.rate(uid(req),id(req),req.body),201));
+  router.get('/sessions/:id/ratings',respond(req=>ratings.list(uid(req),id(req))));
+  router.get('/sessions/:id/creators',respond(req=>profiles.assigned(uid(req),id(req))));
+  router.get('/creator/performance',respond(req=>profiles.self(uid(req))));
+  router.put('/creator/photo',raw({type:'application/octet-stream',limit:'4mb'}),respond(req=>profiles.photo(uid(req),req.body)));
   router.get('/credits',respond(req=>query.credits(uid(req))));
   router.get('/notifications',respond(req=>query.notifications(uid(req))));router.post('/notifications/:id/read',respond(req=>query.readNotification(uid(req),id(req))));
   router.get('/creator/availability',respond(req=>query.availability(uid(req))));router.delete('/creator/availability/:id',respond(req=>query.removeAvailability(uid(req),id(req))));

@@ -16,6 +16,8 @@ import {RetentionService} from '../src/services/retention';
 import {PrintService} from '../src/services/prints';
 import {RecoveryService} from '../src/services/recovery';
 import {SessionChangeService} from '../src/services/session-changes';
+import {CreatorProfileService} from '../src/services/creator-profile';
+import {RatingService} from '../src/services/ratings';
 import {BookingService} from '../src/services/bookings';
 import {DispatchService} from '../src/services/dispatch';
 import {availableCredits} from '../src/services/credits';
@@ -147,4 +149,50 @@ suite('PostgreSQL platform integration',()=>{
  });
  test('deploy-time demo seeding preserves profile and consent changes',async()=>{const before=await repo.account(customer);await db.getRepository(AccountEntity).update(customer,{name:'Saved customer name',language:'ta',consents:{marketing:false,portfolio:true,guardian:false}});await seedDemo(db);const after=await repo.account(customer);expect(after.name).toBe('Saved customer name');expect(after.language).toBe('ta');expect(after.consents.portfolio).toBe(true);await db.getRepository(AccountEntity).update(customer,{name:before.name,language:before.language,consents:before.consents});});
  test('database rejects modification of audit and unbalanced ledger',async()=>{await expect(db.query('UPDATE audit SET action=$1',['changed'])).rejects.toThrow('Append-only');await expect(db.transaction(async m=>{const [t]=await m.query('INSERT INTO ledger_transactions(reference) VALUES($1) RETURNING id',[randomUUID()]);await m.query('INSERT INTO ledger_entries(transaction_id,account,amount_paise) VALUES($1,$2,$3)',[t.id,'cash',100]);})).rejects.toThrow('not balanced');});
+ test('assigned creator cards redact private fields and validate profile photos',async()=>{
+   const x=await paid(160),creator=await repo.creator(creatorAccount),profiles=new CreatorProfileService(repo,true),before=await profiles.self(creatorAccount);
+   await db.getRepository(RoleEntity).update(x.role.id,{creatorId:creator.id,status:'assigned'});
+   await db.getRepository(CreatorEntity).update(creator.id,{profile:{...creator.profile,bio:'Portrait photographer',gear:[{type:'camera',model:'Test camera',serial:'PRIVATE-SERIAL',ownership:'owned'}],portfolioUrls:['https://example.com/portfolio','javascript:alert(1)'],emergencyContact:'+919876543210'}});
+   const own=await request(app).get('/api/creator/performance').auth('demo:creator',{type:'bearer'});expect(own.status).toBe(200);expect(own.body.data.profile.rating).toBe(before.profile.rating);
+   expect((await request(app).get(`/api/sessions/${x.session.id}/creators`).auth('demo:creator3',{type:'bearer'})).status).toBe(404);
+   const cards=await request(app).get(`/api/sessions/${x.session.id}/creators`).auth('demo:customer',{type:'bearer'});expect(cards.status).toBe(200);expect(cards.body.data[0].verificationCode).toBe(own.body.data.profile.verificationCode);expect(cards.body.data[0].portfolioUrls).toEqual(['https://example.com/portfolio']);expect(cards.body.data[0].gear).toEqual([{type:'camera',model:'Test camera'}]);expect(JSON.stringify(cards.body.data)).not.toMatch(/PRIVATE-SERIAL|emergencyContact|checks|accountId/);
+   const photo=await sharp({create:{width:800,height:600,channels:3,background:'#a95846'}}).png().toBuffer();
+   const saved=await request(app).put('/api/creator/photo').auth('demo:creator',{type:'bearer'}).set('Content-Type','application/octet-stream').send(photo);expect(saved.status).toBe(200);
+   const after=await profiles.self(creatorAccount),jpeg=Buffer.from(after.profile.photo!.split(',')[1]!,'base64');expect(await sharp(jpeg).metadata()).toMatchObject({format:'jpeg',width:512,height:512});expect(after.profile.verificationCode).toBe(before.profile.verificationCode);
+   await expect(profiles.photo(creatorAccount,Buffer.from('broken'))).rejects.toMatchObject({code:'PHOTO_FORMAT'});await expect(profiles.photo(creatorAccount,Buffer.alloc(4*1024**2+1))).rejects.toMatchObject({code:'PHOTO_SIZE'});await expect(profiles.photo(creatorAccount,Buffer.from('<svg width="10" height="10"></svg>'))).rejects.toMatchObject({code:'PHOTO_FORMAT'});
+   await expect(new CreatorProfileService(repo,false).photo(creatorAccount,photo)).rejects.toMatchObject({code:'PHOTO_REVIEW_REQUIRED'});await db.query('UPDATE creators SET profile=$2 WHERE id=$1',[creator.id,JSON.stringify(creator.profile)]);
+ });
+ test('crew feedback is per creator, mutual, private and idempotent',async()=>{
+   const body=input(161);body.sessions[0]!.roles[0]!.count=2;const quote=await booking.quote(customer,body),order=await booking.checkout(customer,quote.id);await booking.confirmPayment({id:randomUUID(),orderId:order.id,amountPaise:order.totalPaise,currency:'INR',provider:'test'});
+   const session=await db.getRepository(SessionEntity).findOneByOrFail({orderId:order.id}),roles=await db.getRepository(RoleEntity).findBy({sessionId:session.id}),c1=await repo.creator(creatorAccount),c2=await db.getRepository(CreatorEntity).findOneByOrFail({accountId:(await db.getRepository(AccountEntity).findOneByOrFail({subject:'demo:creator2'})).id});
+   await db.getRepository(RoleEntity).update(roles[0]!.id,{creatorId:c1.id,status:'session_completed'});await db.getRepository(RoleEntity).update(roles[1]!.id,{creatorId:c2.id,status:'session_completed'});await db.getRepository(SessionEntity).update(session.id,{status:'session_completed',completedAt:new Date()});
+   const url=`/api/sessions/${session.id}/ratings`,review={kind:'creator',creatorId:c1.id,stars:3,tags:['friendly','punctual','friendly'],comment:'Helpful crew'};
+   const results=await Promise.all([request(app).post(url).auth('demo:customer',{type:'bearer'}).send(review),request(app).post(url).auth('demo:customer',{type:'bearer'}).send(review)]);expect(results.map(r=>r.status)).toEqual([201,201]);expect(results[0]!.body.data.id).toBe(results[1]!.body.data.id);expect(results[0]!.body.data.tags).toEqual(['friendly','punctual']);
+   expect((await request(app).post(url).auth('demo:customer',{type:'bearer'}).send({...review,stars:4})).status).toBe(409);expect((await request(app).post(url).auth('demo:customer',{type:'bearer'}).send({...review,creatorId:c2.id,stars:4})).status).toBe(201);
+   expect((await request(app).post(url).auth('demo:customer',{type:'bearer'}).send({kind:'creator',stars:5})).body.error.code).toBe('CREATOR_REQUIRED');expect((await request(app).post(url).auth('demo:customer',{type:'bearer'}).send({...review,creatorId:randomUUID()})).status).toBe(404);
+   expect((await request(app).post(url).auth('demo:creator',{type:'bearer'}).send({kind:'customer',stars:5,tags:['venue_ready'],comment:'Host had the venue ready'})).status).toBe(201);
+   expect((await request(app).post(url).auth('demo:creator2',{type:'bearer'}).send({kind:'customer',stars:4})).status).toBe(201);
+   expect((await request(app).post(url).auth('demo:creator',{type:'bearer'}).send({kind:'delivery',stars:5})).status).toBe(403);expect((await request(app).post(url).auth('demo:customer',{type:'bearer'}).send({kind:'customer',stars:5})).status).toBe(403);expect((await request(app).post(url).auth('demo:creator3',{type:'bearer'}).send({kind:'customer',stars:5})).status).toBe(404);
+   const own=await request(app).get(url).auth('demo:customer',{type:'bearer'});expect(own.body.data.ratings).toHaveLength(2);expect(own.body.data.windows.session.open).toBe(true);expect(own.body.data.windows.delivery.open).toBe(false);
+   const profiles=new CreatorProfileService(repo,true),performance=await profiles.self(creatorAccount);expect(performance.profile.rating).toBe(3);expect(performance.statistics.review).toBe('suspension_review');expect((await repo.creator(creatorAccount)).status).toBe(c1.status);
+   for(let i=0;i<20&&await drainDemoOutbox(repo);i++);const alerts=await db.query("SELECT n.account_id,o.payload FROM notifications n JOIN outbox o ON o.id=n.event_id WHERE o.kind='creator_quality_review' AND o.entity_id=$1",[c1.id]);expect(alerts.some((n:{account_id:string})=>n.account_id===opsId)).toBe(true);expect(alerts.some((n:{account_id:string})=>n.account_id===customer||n.account_id===creatorAccount)).toBe(false);expect(alerts[0].payload.review).toBe('suspension_review');
+ });
+ test('delivery feedback uses its own seven-day window after final delivery',async()=>{
+   const x=await paid(162),svc=new RatingService(repo),now=new Date();await db.getRepository(SessionEntity).update(x.session.id,{completedAt:new Date(now.getTime()-20*86400000),status:'final_delivered'});
+   await expect(svc.rate(customer,x.session.id,{kind:'delivery',stars:5},now)).rejects.toMatchObject({code:'RATING_WINDOW'});
+   await db.query('UPDATE galleries SET final_delivered_at=$2 WHERE order_id=$1',[x.order.id,new Date(now.getTime()-86400000)]);await expect(svc.rate(customer,x.session.id,{kind:'creator',stars:5,creatorId:(await repo.creator(creatorAccount)).id},now)).rejects.toMatchObject({code:'RATING_WINDOW'});await expect(svc.rate(customer,x.session.id,{kind:'delivery',stars:5,tags:['delivery_quality']},now)).resolves.toMatchObject({kind:'delivery'});
+   expect((await svc.list(customer,x.session.id,now)).windows).toMatchObject({session:{open:false},delivery:{open:true}});expect((await svc.list(customer,x.session.id,new Date(now.getTime()+7*86400000))).windows.delivery.open).toBe(false);
+   await expect(svc.rate(customer,x.session.id,{kind:'delivery',stars:5},new Date(now.getTime()+7*86400000))).rejects.toMatchObject({code:'RATING_WINDOW'});
+ });
+
+ test('creator performance considers only the latest twenty recipient-specific reviews',async()=>{
+   const x=await paid(163),c=await db.getRepository(CreatorEntity).findOneByOrFail({accountId:(await db.getRepository(AccountEntity).findOneByOrFail({subject:'demo:creator3'})).id}),now=new Date();
+   for(let i=0;i<21;i++){
+     const start=new Date(now.getTime()-(30-i)*86400000),end=new Date(start.getTime()+2*3600000);
+     const [session]=await db.query("INSERT INTO sessions(order_id,start_at,end_at,zone_id,status,input,total_paise,completion_code,completed_at) VALUES($1,$2,$3,'chennai-pilot','closed',$4,1,'123456',$3) RETURNING id",[x.order.id,start,end,JSON.stringify(x.session.input)]);
+     await db.query("INSERT INTO ratings(session_id,rater_id,kind,creator_id,stars,comment,created_at) VALUES($1,$2,'creator',$3,$4,'Rolling-window test',$5)",[session.id,customer,c.id,i===0?1:5,new Date(now.getTime()-(21-i)*60000)]);
+   }
+   const result=await new CreatorProfileService(repo,true).self(c.accountId);expect(result.profile.rating).toBe(5);expect(result.profile.ratingCount).toBe(20);expect(result.statistics.review).toBe('within_standard');
+ });
+
 });

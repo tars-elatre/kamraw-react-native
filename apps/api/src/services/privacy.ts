@@ -17,7 +17,7 @@ export class PrivacyService {
     tickets:'SELECT id,order_id,subject,body,category,status,created_at FROM tickets WHERE account_id=$1',
     supportMessages:'SELECT m.ticket_id,m.body,m.created_at FROM ticket_messages m JOIN tickets t ON t.id=m.ticket_id WHERE m.actor_id=$1 OR (t.account_id=$1 AND NOT m.internal)',
     messages:'SELECT session_id,body,created_at FROM messages WHERE actor_id=$1',
-    ratings:'SELECT session_id,kind,stars,comment,created_at FROM ratings WHERE rater_id=$1',
+    ratings:'SELECT session_id,kind,creator_id,stars,tags,comment,created_at FROM ratings WHERE rater_id=$1',
     payments:'SELECT p.id,p.order_id,p.provider,p.amount_paise,p.currency,p.created_at FROM payment_events p JOIN orders o ON o.id=p.order_id WHERE o.customer_id=$1',
     refunds:'SELECT r.* FROM refunds r JOIN sessions s ON s.id=r.session_id JOIN orders o ON o.id=s.order_id WHERE o.customer_id=$1',
     credits:'SELECT id,session_id,reference,amount_paise,expires_at,created_at FROM customer_credits WHERE customer_id=$1',
