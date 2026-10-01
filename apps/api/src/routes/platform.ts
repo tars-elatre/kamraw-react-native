@@ -4,6 +4,7 @@ import {createHmac,timingSafeEqual} from 'node:crypto';
 import {PlatformRepository} from '../repositories/platform';
 import {BookingService} from '../services/bookings';
 import {DispatchService} from '../services/dispatch';
+import {PrintService} from '../services/prints';
 import {RecoveryService} from '../services/recovery';
 import {SessionChangeService} from '../services/session-changes';
 import {SessionService} from '../services/sessions';
@@ -17,7 +18,7 @@ import {id,page,respond} from '../controllers/platform';
 import type {Env} from '../config/env';
 import {categories,earliestStart} from '@kamraw/domain';
 export function routes(repo:PlatformRepository,env:Env){
-  const router=Router(),booking=new BookingService(repo),changes=new SessionChangeService(repo),recovery=new RecoveryService(repo),dispatch=new DispatchService(repo),session=new SessionService(repo,env.APP_MODE==='demo'),media=new MediaService(repo,env.MEDIA_ROOT,env.APP_MODE==='demo'),ops=new OperationsService(repo,env.APP_MODE==='demo'),account=new AccountService(repo),query=new QueryService(repo);
+  const router=Router(),booking=new BookingService(repo),changes=new SessionChangeService(repo),recovery=new RecoveryService(repo),prints=new PrintService(repo,env.APP_MODE==='demo'),dispatch=new DispatchService(repo),session=new SessionService(repo,env.APP_MODE==='demo'),media=new MediaService(repo,env.MEDIA_ROOT,env.APP_MODE==='demo'),ops=new OperationsService(repo,env.APP_MODE==='demo'),account=new AccountService(repo),query=new QueryService(repo);
   router.get('/catalog',respond(async()=>({...await repo.config(),categories,serverTime:new Date().toISOString(),earliestStart:earliestStart(new Date()).toISOString(),mode:env.APP_MODE})));
   router.get('/demo/accounts',respond(async()=>{if(env.APP_MODE!=='demo')throw new AppError(404,'NOT_FOUND','Not found');return repo.db.query("SELECT name,role,replace(subject,'demo:','') AS handle FROM accounts WHERE subject LIKE 'demo:%' ORDER BY role,name");}));
   router.post('/shared/:token',respond(req=>media.sharedTickets(z.string().min(40).max(100).parse(req.params.token),z.object({pin:z.string().optional()}).parse(req.body).pin)));
@@ -52,6 +53,7 @@ export function routes(repo:PlatformRepository,env:Env){
   router.put('/assets/:id/favourite',respond(req=>query.favourite(uid(req),id(req),z.object({selected:z.boolean()}).parse(req.body).selected)));
   router.get('/tickets/:id/messages',respond(req=>query.ticketMessages(uid(req),id(req))));router.get('/ops/tickets/:id/messages',permit('support'),respond(req=>query.ticketMessages(uid(req),id(req),true)));
   router.get('/tickets',respond(req=>query.tickets(uid(req))));router.post('/tickets',respond(req=>account.ticket(uid(req),req.body),201));router.post('/tickets/:id/messages',respond(req=>query.ticketReply(uid(req),id(req),z.object({body:z.string().min(1).max(4000)}).parse(req.body).body)));
+  router.get('/prints/:id',respond(req=>prints.detail(uid(req),id(req))));router.post('/prints/:id/demo-approve',respond(req=>prints.approveDemo(uid(req),id(req),req.body)));router.get('/ops/prints',permit('operations'),respond(()=>prints.queue()));router.post('/ops/prints/:id/proof',permit('operations'),respond(req=>prints.prepare(uid(req),id(req),req.body)));router.post('/ops/prints/:id/advance',permit('operations'),respond(req=>prints.advance(uid(req),id(req),req.body)));
   router.get('/payments',respond(req=>query.payments(uid(req))));router.post('/prints',respond(req=>account.prints(uid(req),req.body),201));router.get('/prints',respond(req=>query.printOrders(uid(req))));
   router.get('/ops/incidents',permit('operations'),respond(()=>repo.db.query('SELECT i.*,o.code FROM incidents i JOIN sessions s ON s.id=i.session_id JOIN orders o ON o.id=s.order_id ORDER BY i.created_at DESC LIMIT 100')));router.get('/ops/dashboard',permit('operations'),respond(()=>ops.dashboard()));router.get('/ops/creators',permit('onboarding'),respond(()=>ops.creators()));router.put('/ops/creators/:id',permit('onboarding'),respond(req=>ops.reviewCreator(uid(req),id(req),req.body)));
   router.get('/ops/dispatch',permit('dispatch'),respond(()=>dispatch.board()));router.get('/ops/roles/:id/candidates',permit('dispatch'),respond(req=>dispatch.manualCandidates(id(req))));router.post('/ops/roles/:id/offer',permit('dispatch'),respond(req=>dispatch.manualOffer(uid(req),id(req),req.body)));
